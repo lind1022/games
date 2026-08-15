@@ -1,1 +1,7 @@
-*.png
+school map.png
+node_modules/
+dist/
+dist-ts/
+*.tsbuildinfo
+/data/
+.DS_Store
