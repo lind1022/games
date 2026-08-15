@@ -4,9 +4,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>School Game</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #000;
+      }
+      #app {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        color: white;
+        font-family: monospace;
+        font-size: 14px;
+        z-index: 10;
+        pointer-events: none;
+        text-shadow: 0 0 4px black;
+      }
+      #crosshair {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        width: 6px;
+        height: 6px;
+        margin: -3px 0 0 -3px;
+        border-radius: 50%;
+        background: white;
+        mix-blend-mode: difference;
+        z-index: 10;
+        pointer-events: none;
+      }
+    </style>
   </head>
   <body>
     <div id="app">Connecting&hellip;</div>
+    <div id="crosshair"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
