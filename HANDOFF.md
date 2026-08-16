@@ -5,13 +5,14 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-16:** Phases 0-5 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
-`f3e4edc`, `c6449b0`). Phase 5 (admin panel, plus a Reissue action and a raised chat-log display cap
-added after initial review) was scripted-end-to-end-tested against throwaway server instances rather
-than the product owner's real dev server, and committed on the product owner's go-ahead to move on —
-it does **not** carry an explicit manual-browser-pass confirmation the way Phases 1-4 do (see §3).
+**As of 2026-08-16:** Phases 0-6 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
+`f3e4edc`, `c6449b0`, `a4185cf`). Phase 5 (admin panel, plus a Reissue action and a raised chat-log
+display cap added after initial review) was scripted-end-to-end-tested against throwaway server
+instances rather than the product owner's real dev server, and committed on the product owner's
+go-ahead to move on — it does **not** carry an explicit manual-browser-pass confirmation the way
+Phases 1-4 do (see §3).
 
-Phase 6 (deploy, durability, backups) is **in progress and uncommitted**. Hosting is decided
+Phase 6 (deploy, durability, backups) is **committed, but not yet deployed**. Hosting is decided
 (**Railway**) and the dirty-chunk-flush optimization is being **deliberately skipped**, both per the
 product owner's explicit call. Everything achievable without a real Railway account is done and
 locally verified: boot-time writability assertion, `GET /health`, explicit `0.0.0.0` bind, a real
