@@ -1,21 +1,36 @@
 import * as THREE from 'three';
 import { BLOCKS, PROTOCOL_VERSION, decodeChunk, worldToChunk } from '@game/shared';
-import { Net } from './net.js';
+import { Net, type JoinPayload } from './net.js';
 import { ClientWorld } from './world.js';
 import { ChunkRenderer } from './chunkRenderer.js';
 import { PlayerController } from './controls.js';
 import { raycastVoxel } from './raycast.js';
 import { RemotePlayers } from './remotePlayers.js';
 
-const statusEl = document.getElementById('app');
-if (!statusEl) throw new Error('missing #app element');
-statusEl.textContent = `Connecting… (protocol v${PROTOCOL_VERSION})`;
+const SESSION_TOKEN_KEY = 'sessionToken';
+
+const statusElMaybe = document.getElementById('app');
+if (!statusElMaybe) throw new Error('missing #app element');
+const statusEl: HTMLElement = statusElMaybe;
+statusEl.textContent = `Loading… (protocol v${PROTOCOL_VERSION})`;
 
 const chatLogElMaybe = document.getElementById('chat-log');
 const chatInputElMaybe = document.getElementById('chat-input') as HTMLInputElement | null;
 if (!chatLogElMaybe || !chatInputElMaybe) throw new Error('missing chat UI elements');
 const chatLogEl: HTMLElement = chatLogElMaybe;
 const chatInputEl: HTMLInputElement = chatInputElMaybe;
+
+const joinScreenElMaybe = document.getElementById('join-screen');
+const joinCodeInputElMaybe = document.getElementById('join-code-input') as HTMLInputElement | null;
+const joinSubmitElMaybe = document.getElementById('join-submit');
+const joinErrorElMaybe = document.getElementById('join-error');
+if (!joinScreenElMaybe || !joinCodeInputElMaybe || !joinSubmitElMaybe || !joinErrorElMaybe) {
+  throw new Error('missing join screen elements');
+}
+const joinScreenEl: HTMLElement = joinScreenElMaybe;
+const joinCodeInputEl: HTMLInputElement = joinCodeInputElMaybe;
+const joinSubmitEl: HTMLElement = joinSubmitElMaybe;
+const joinErrorEl: HTMLElement = joinErrorElMaybe;
 
 const MAX_CHAT_LINES = 50;
 function appendChatLine(line: HTMLElement): void {
@@ -81,58 +96,108 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-const displayName = `Player${Math.floor(Math.random() * 1000)}`;
-
+// Real identity (PLAN.md Phase 4): the only source of a display name is a
+// successful join, resolved server-side from a code or a resumed session —
+// the client never invents or supplies one. `net` doesn't exist until the
+// first join attempt starts, and a fresh attempt replaces it entirely
+// (the server closes the socket on any join failure, so there's nothing to
+// reuse — see index.ts's join handling).
+let net: Net | undefined;
 let joined = false;
 
-const net = new Net(displayName, {
-  onOpen: () => {
-    statusEl.textContent = 'Connected';
-  },
-  onClose: () => {
-    statusEl.textContent = 'Disconnected — reload to reconnect';
-    joined = false;
-  },
-  onError: (msg) => {
-    console.error('[server error]', msg.message);
-    appendSystemMessage(msg.message);
-  },
-  onWorldState: (msg) => {
-    for (const chunk of msg.chunks) {
-      const blocks = decodeChunk(base64ToBytes(chunk.data));
-      world.setChunk(chunk.chunkX, chunk.chunkZ, blocks);
-      chunkRenderer.updateChunk(chunk.chunkX, chunk.chunkZ, blocks);
-    }
-    controller.setSpawn(msg.spawn.x, msg.spawn.y, msg.spawn.z);
-    statusEl.textContent = `Connected as ${msg.selfName}`;
-    joined = true;
-  },
-  onBlockUpdate: (msg) => {
-    // Applied only on the server's broadcast — the client never writes
-    // locally (PLAN.md Phase 1: proves server authority).
-    world.setBlock(msg.x, msg.y, msg.z, msg.blockId);
-    const { chunkX, chunkZ } = worldToChunk(msg.x, msg.z);
-    const blocks = world.getChunkBlocks(chunkX, chunkZ);
-    if (blocks) chunkRenderer.updateChunk(chunkX, chunkZ, blocks);
-  },
-  onPlayerJoin: () => {
-    // Announcement only — the entity is created lazily by the first
-    // player-state (which carries position and name), see onPlayerState.
-  },
-  onPlayerLeave: (msg) => {
-    remotePlayers.remove(msg.id);
-  },
-  onPlayerState: (msg) => {
-    if (!remotePlayers.has(msg.id)) {
-      remotePlayers.add(msg.id, msg.name, msg.position.x, msg.position.y, msg.position.z, msg.yaw);
-    } else {
-      remotePlayers.updateState(msg.id, msg.position.x, msg.position.y, msg.position.z, msg.yaw);
-    }
-  },
-  onChatMessage: (msg) => {
-    appendChatMessage(msg.from, msg.text);
-  },
+function attemptJoin(payload: JoinPayload): void {
+  joinSubmitEl.setAttribute('aria-disabled', 'true');
+  joinCodeInputEl.disabled = true;
+  joinErrorEl.textContent = '';
+  statusEl.textContent = 'Connecting…';
+
+  net = new Net(payload, {
+    onOpen: () => {
+      statusEl.textContent = 'Connecting…';
+    },
+    onClose: () => {
+      statusEl.textContent = 'Disconnected — reload to reconnect';
+      joined = false;
+    },
+    onError: (msg) => {
+      console.error('[server error]', msg.message);
+      if (joined) {
+        appendSystemMessage(msg.message);
+        return;
+      }
+      // A join attempt failed. If it was a stored-session resume, the
+      // token is stale (expired/revoked/superseded) — drop it and fall
+      // back to asking for a fresh code rather than retrying it forever.
+      if ('sessionToken' in payload) {
+        localStorage.removeItem(SESSION_TOKEN_KEY);
+      }
+      joinSubmitEl.removeAttribute('aria-disabled');
+      joinCodeInputEl.disabled = false;
+      joinCodeInputEl.value = '';
+      joinCodeInputEl.focus();
+      joinErrorEl.textContent = msg.message;
+      joinScreenEl.classList.remove('hidden');
+      statusEl.textContent = `Loading… (protocol v${PROTOCOL_VERSION})`;
+    },
+    onWorldState: (msg) => {
+      for (const chunk of msg.chunks) {
+        const blocks = decodeChunk(base64ToBytes(chunk.data));
+        world.setChunk(chunk.chunkX, chunk.chunkZ, blocks);
+        chunkRenderer.updateChunk(chunk.chunkX, chunk.chunkZ, blocks);
+      }
+      controller.setSpawn(msg.spawn.x, msg.spawn.y, msg.spawn.z);
+      localStorage.setItem(SESSION_TOKEN_KEY, msg.sessionToken);
+      statusEl.textContent = `Connected as ${msg.selfName}`;
+      joinScreenEl.classList.add('hidden');
+      joined = true;
+    },
+    onBlockUpdate: (msg) => {
+      // Applied only on the server's broadcast — the client never writes
+      // locally (PLAN.md Phase 1: proves server authority).
+      world.setBlock(msg.x, msg.y, msg.z, msg.blockId);
+      const { chunkX, chunkZ } = worldToChunk(msg.x, msg.z);
+      const blocks = world.getChunkBlocks(chunkX, chunkZ);
+      if (blocks) chunkRenderer.updateChunk(chunkX, chunkZ, blocks);
+    },
+    onPlayerJoin: () => {
+      // Announcement only — the entity is created lazily by the first
+      // player-state (which carries position and name), see onPlayerState.
+    },
+    onPlayerLeave: (msg) => {
+      remotePlayers.remove(msg.id);
+    },
+    onPlayerState: (msg) => {
+      if (!remotePlayers.has(msg.id)) {
+        remotePlayers.add(msg.id, msg.name, msg.position.x, msg.position.y, msg.position.z, msg.yaw);
+      } else {
+        remotePlayers.updateState(msg.id, msg.position.x, msg.position.y, msg.position.z, msg.yaw);
+      }
+    },
+    onChatMessage: (msg) => {
+      appendChatMessage(msg.from, msg.text);
+    },
+  });
+}
+
+function submitJoinCode(): void {
+  const code = joinCodeInputEl.value.trim();
+  if (!code) return;
+  attemptJoin({ code });
+}
+
+joinSubmitEl.addEventListener('click', submitJoinCode);
+joinCodeInputEl.addEventListener('keydown', (event) => {
+  if (event.code === 'Enter') submitJoinCode();
 });
+
+const storedToken = localStorage.getItem(SESSION_TOKEN_KEY);
+if (storedToken) {
+  joinScreenEl.classList.add('hidden');
+  attemptJoin({ sessionToken: storedToken });
+} else {
+  joinScreenEl.classList.remove('hidden');
+  joinCodeInputEl.focus();
+}
 
 // Minimal chat UI (CLAUDE.md §3: plain DOM overlay, not React). Enter opens
 // the input and releases pointer lock; Enter again sends and re-locks;
@@ -170,7 +235,7 @@ chatInputEl.addEventListener('keydown', (event) => {
   event.stopPropagation();
   if (event.code === 'Enter') {
     const text = chatInputEl.value.trim();
-    if (text.length > 0) net.send({ type: 'chat-message', text });
+    if (text.length > 0) net?.send({ type: 'chat-message', text });
     closeChat();
   } else if (event.code === 'Escape') {
     closeChat();
@@ -186,12 +251,12 @@ renderer.domElement.addEventListener('mousedown', (event) => {
   if (!hit) return;
 
   if (event.button === 0) {
-    net.send({ type: 'block-update-intent', x: hit.x, y: hit.y, z: hit.z, blockId: BLOCKS.AIR.id });
+    net?.send({ type: 'block-update-intent', x: hit.x, y: hit.y, z: hit.z, blockId: BLOCKS.AIR.id });
   } else if (event.button === 2) {
     const px = hit.x + hit.normal.x;
     const py = hit.y + hit.normal.y;
     const pz = hit.z + hit.normal.z;
-    net.send({ type: 'block-update-intent', x: px, y: py, z: pz, blockId: PLACEMENT_BLOCK });
+    net?.send({ type: 'block-update-intent', x: px, y: py, z: pz, blockId: PLACEMENT_BLOCK });
   }
 });
 
@@ -210,7 +275,7 @@ function tick(now: number): void {
   if (joined && now - lastMoveSend >= MOVE_SEND_INTERVAL_MS) {
     lastMoveSend = now;
     const state = controller.getState();
-    net.send({
+    net?.send({
       type: 'player-move',
       position: { x: state.x, y: state.y, z: state.z },
       yaw: state.yaw,

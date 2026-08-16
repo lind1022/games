@@ -5,10 +5,9 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-16:** Phase 0, 1, and 2 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`).
-Phase 3 (chat, with its safety layer) is implemented, scripted-end-to-end-tested, and confirmed in a
-real two-tab browser pass by the product owner — with one small UX gap the pass surfaced (server
-rejections were console-only, invisible in the UI) fixed on the spot. Committing is next. See §6.
+**As of 2026-08-16:** Phases 0-4 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
+and Phase 4's commit — see git log). Phase 4's join screen was confirmed working in a real browser
+pass by the product owner. Phase 5 (admin panel) is next — see §6.
 
 ---
 
@@ -98,7 +97,7 @@ Broadcast join/leave/move, remote players rendered, and the reach-distance check
   `onPlayerState` handlers; `main.ts` sends `player-move` at ~12 Hz (within PLAN's 10–15 Hz target)
   once the initial `world-state` has been received, and calls `remotePlayers.tick()` every frame.
 
-### Phase 3 — chat, with its safety layer (**uncommitted**, in the working tree now)
+### Phase 3 — chat, with its safety layer (committed, pushed: `4b455ee`)
 Free-text chat meeting CLAUDE.md §7 — masking, rate limiting, PII-heuristic flagging, and full
 logging, built in from the start rather than bolted on:
 
@@ -147,6 +146,53 @@ logging, built in from the start rather than bolted on:
   messages (rate limit, chat mute, reach/bounds rejections, …) now also render as a system line in
   the chat log (styled distinctly via `.system`), not just `console.error` — added after the product
   owner's browser pass, see §3.
+
+### Phase 4 — join codes & sessions
+Replaces the dev-stub join with real identity, per PLAN.md and the C5 session-takeover resolution:
+
+- **`shared/src/protocol.ts`** — `PROTOCOL_VERSION` bumped 1→2 (contract #8: a breaking shape change).
+  The `join` message's `code` is now optional and `name` is gone entirely — a client no longer
+  supplies its own display name, ever; it's always resolved server-side from whichever of `code` /
+  new `sessionToken` field is present. `world-state` gained a `sessionToken` field: the client stores
+  it (e.g. `localStorage`) and sends it back on the next join to resume without re-entering a code.
+- **`server/src/auth.ts`** (new) — `hashWithPepper` (HMAC-SHA256; `JOIN_CODE_PEPPER` env var, with an
+  insecure dev fallback that prints a loud warning if unset — same pattern as `DATA_DIR`'s dev
+  fallback); `generateJoinCode` (6 chars from `23456789BCDFGHJKMNPQRSTVWXYZ` — digits 2-9 plus
+  consonants only, excluding `0/O`, `1/I/L`, and all vowels per PLAN.md, so a code is never
+  ambiguous-to-type or accidentally spells a word); `generateSessionToken` (256-bit, base64url);
+  `SESSION_EXPIRY_MS` (60 days — the middle of PLAN's proposed 30-90 day range, §8 open question #5).
+- **`server/src/db.ts`** — added `join_codes` and `sessions` tables (schema per PLAN.md §6, including
+  the partial unique index `WHERE revoked = 0` that backs up the one-active-session-per-code invariant
+  at the DB level regardless of application logic). `createJoinCode`/`lookupJoinCode`; `createSession`
+  (in one transaction: revoke any existing active session for the code as `'superseded'`, **then**
+  insert the new one — this is C5's DB-side half) /`lookupSession` (checks `revoked = 0` **and**
+  sliding-expiry) /`touchSession`. Plaintext code/token are only ever returned once, at creation.
+- **`server/src/createCode.ts`** (new CLI) — `npm run create-code -w server -- "Jack"` prints a
+  plaintext code once. There's no admin panel yet (Phase 5), so this is the only way to issue a code
+  until then.
+- **`server/src/index.ts`** — `verifyClient` validates the WS upgrade's `Origin` header against an
+  allowlist (env-configurable, defaults to the local dev origins) — explicitly framed as
+  defense-in-depth, not the primary guard, since the whole reason the session token lives in
+  `localStorage` rather than a cookie is to avoid the ambient-auth problem Origin-checking usually
+  exists to stop. Join resolves identity via `sessionToken` (touch + reuse) or `code` (rate-limited
+  5/15min **per IP**, resume attempts don't count against this budget); every failure path closes the
+  socket rather than leaving a half-joined connection around for a retry. Session takeover (C5) at the
+  live-connection level: a fresh join for a code that already has a live connection sends that old
+  connection a friendly "You joined from another device" error, closes it, and broadcasts its
+  `player-leave` to everyone else — **the new join always wins, the incoming connection is never
+  rejected**, so a flaky-wifi reconnect can never lock a child out. `connectionsByCodeHash` tracks this
+  with a defensive check on cleanup (only clear the map entry if it still points at *this* connection,
+  in case a takeover already replaced it before a stale socket's `close` event arrives).
+- **`client/index.html`** / **`client/src/main.ts`** — new `#join-screen` overlay (full-viewport,
+  blocks canvas interaction while visible, so nothing needs separate gating for "haven't joined yet").
+  Boot logic: a stored `sessionToken` attempts a silent resume first; otherwise (or if that resume
+  fails — the token is stale/revoked/expired) the join-code form is shown. A failed **fresh code**
+  entry re-shows the form with the server's error message and lets the child retry (subject to the
+  server's rate limit); a failed **resume** silently drops the stale token and falls back to the code
+  form instead of looping forever. On success the token is stored and the join screen hides.
+- **`client/src/net.ts`** — `Net`'s constructor now takes a `JoinPayload` (`{ code }` or
+  `{ sessionToken }`) instead of a display name; the display name was always dev-stub-only, and now
+  there's nothing for the client to supply.
 
 ---
 
@@ -197,6 +243,12 @@ for this audience. Fixed: server `error` messages now also render as a `⚠`-pre
 the chat log (`main.ts`'s `appendSystemMessage`, styled via `.system` in `index.html`) — covers rate
 limit, chat mute, and the existing reach/bounds rejections for block placement too, all from the one
 already-generic `error` message type.
+
+### Phase 4 — done
+No browser automation tool was available in this session either. Server-side identity resolution,
+takeover, rate limiting, and DB persistence were scripted-E2E-verified first (§4); the product owner
+then tested the join screen itself directly (invalid code, valid code, reload-to-resume, second-tab
+takeover) and confirmed it all works.
 
 ---
 
@@ -265,8 +317,35 @@ None of this used a real GPU/display — that gap was closed by §3's Phase 1 ma
   as a row — only messages that were actually sent get logged.
 - `tsc -b` clean across all packages.
 
-**Still not covered by anything automated:** actual rendering correctness (§3 Phase 2), and the chat
-UI's interactive behavior (§3 Phase 3).
+**Phase 4 additions** (scripted via `ws`, not checked in, using two real codes issued through the new
+`npm run create-code` CLI):
+- Fresh join with a valid code succeeds and returns a `sessionToken`; an invalid code is rejected and
+  the socket closes; joining with neither `code` nor `sessionToken` is rejected with a clear message;
+  a stale protocol version is rejected with the existing "please refresh" message.
+- Resuming via the returned `sessionToken` (no code) succeeds, returns the display name, and reuses
+  the **same** token rather than issuing a new one.
+- **Takeover**: joining again with the same code from a second connection succeeds with a **different**
+  token, and the connection that had been using the previous token receives a "You joined from another
+  device" error and its socket closes. Re-attempting to resume with that now-superseded token
+  correctly fails ("session expired") rather than silently succeeding.
+- A **third, unrelated** connection (joined with a completely different code) correctly receives the
+  `player-leave` broadcast for the superseded connection's id — takeover visibility isn't limited to
+  the two directly-involved connections.
+- Code-entry rate limiting: hammering invalid codes from one IP is capped at exactly 5 before "Too
+  many attempts" kicks in (verified fresh after restarting the dev server to reset in-memory state,
+  since the limiter's Map persists across separate test-script runs within the same server process —
+  confirmed the *cumulative, per-IP, cross-code* counting is correct, not per-code).
+- Queried `data/world.db` directly: `join_codes.code_hash` and `sessions.token_hash` are HMAC digests,
+  never plaintext; exactly one `sessions` row per `code_hash` has `revoked = 0` at any time, with
+  superseded rows correctly marked `revoke_reason = 'superseded'`.
+- `tsc -b` clean across all packages (surfaced, and fixed, an unrelated pre-existing pattern: TS's
+  narrowing of a `document.getElementById(...)` null-check doesn't reliably persist into closures
+  defined later in the same file for `statusEl`/`chatLogEl`/`chatInputEl`/the new join-screen
+  elements — worked around throughout `main.ts` by rebinding to a definitely-non-null `const` right
+  after each guard, the standard idiom for this TS limitation).
+
+**Still not covered by anything automated:** actual rendering correctness (§3 Phase 2), the chat UI's
+interactive behavior (§3 Phase 3), and the join screen (§3 Phase 4).
 
 ---
 
@@ -284,15 +363,20 @@ UI's interactive behavior (§3 Phase 3).
 
 ---
 
-## 6. Next up: Phase 4 (per PLAN.md)
+## 6. Next up: Phase 5 (per PLAN.md)
 
-Phases 0-3 are all confirmed in a real browser (Phase 3 as of this update — commit pending, see the
-top of this file). Phase 4 replaces the dev-stub join with real identity: 6-char codes from a
-Crockford-style alphabet excluding ambiguous glyphs and vowels; codes hashed (HMAC-SHA256 + pepper),
-never stored in plaintext; a session token in `localStorage`; session takeover semantics (C5 — a new
-join from the same code revokes the old session with a friendly message, never a hard lockout,
-because school wifi drops constantly and an offline admin can't rescue a stranded child); rate-limited
-code entry. This is also the point real display names start existing, which makes
-`chatFilter.ts`'s `WHITELIST` (currently empty) **no longer optional to seed** — every child's name
-and school-specific vocabulary needs to go in there and get smoke-tested through the filter before
-real kids are chatting, per PLAN.md's explicit pre-launch callout. Full spec: PLAN.md → Phase 4.
+Phases 0-4 are all committed, pushed, and confirmed in a real browser. Two things worth doing before
+real kids ever get a code, not blocking Phase 5 itself:
+- **Seed `chatFilter.ts`'s `WHITELIST`** with real children's names and school-specific vocabulary
+  once real codes exist — it's still empty; PLAN.md flags this as a critical pre-launch step.
+- **Set a real `JOIN_CODE_PEPPER`** before any deployment a real child could reach — every environment
+  currently falls back to the same hardcoded insecure default if the env var is unset.
+
+Phase 5 is the admin panel: code management and moderation without shell access, for an admin who's
+usually offline. Per PLAN.md — real admin login first (argon2id password, httpOnly+Secure+SameSite
+cookie, rate-limited: an unauthenticated admin panel is worse than none); create/list/revoke codes
+(replacing the `create-code` CLI); live online-players list (the `GET /players` endpoint from Phase 2
+becomes real UI here); chat log review with a flagged-only filter and per-player context; four
+distinct moderation actions — kick (disconnect, code still valid), mute (chat-only, and the muted
+child is told, not silently dropped), revoke (disable + disconnect + unusable), and rollback
+("undo player X's changes in the last N minutes", using `block_changes`' pre-images).

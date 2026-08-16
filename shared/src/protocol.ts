@@ -9,7 +9,10 @@
 
 import { z } from 'zod';
 
-export const PROTOCOL_VERSION = 1;
+// Bumped 1 -> 2 for Phase 4 (join codes & sessions): the join message's
+// shape changed (code is now optional / sessionToken added / name removed)
+// per contract #8 — a breaking change to a message shape bumps this.
+export const PROTOCOL_VERSION = 2;
 
 const vec3Schema = z.object({
   x: z.number(),
@@ -34,12 +37,15 @@ const joinMessageSchema = z.object({
   type: z.literal('join'),
   protocolVersion: z.number().int(),
   /**
-   * Join code (contract #9): present from day one, but NOT validated
-   * against join_codes until Phase 4. Pre-Phase-4 servers accept any
-   * non-empty string here and use `name` as the dev-stub display name.
+   * Phase 4 (join codes & sessions, contract #9's real implementation):
+   * exactly one of these two identifies the player. `code` is a fresh
+   * join-code entry; `sessionToken` resumes a previously-issued session
+   * (stored client-side, e.g. in localStorage) without re-entering a code.
+   * Display name is never client-supplied — it's looked up server-side
+   * from whichever of these resolves.
    */
-  code: z.string().min(1),
-  name: z.string().min(1).max(32).optional(),
+  code: z.string().min(1).optional(),
+  sessionToken: z.string().min(1).optional(),
 });
 export type JoinMessage = z.infer<typeof joinMessageSchema>;
 
@@ -84,6 +90,8 @@ const worldStateSchema = z.object({
   spawn: vec3Schema,
   selfId: z.string(),
   selfName: z.string(),
+  /** Store this (e.g. in localStorage) and send it back as `sessionToken` on the next join. */
+  sessionToken: z.string(),
 });
 export type WorldState = z.infer<typeof worldStateSchema>;
 

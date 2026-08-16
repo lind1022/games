@@ -20,6 +20,17 @@ import { GameDb } from './db.js';
 import { TokenBucket } from './rateLimit.js';
 import { World, WORLD_CHUNKS, WORLD_SIZE } from './world.js';
 
+// Origin validation (PLAN.md Phase 4): defense-in-depth, not the primary
+// guard — this app deliberately keeps the session token in localStorage
+// rather than a cookie specifically so there's no ambient auth for a
+// cross-origin page to ride on, which is the attack Origin-checking
+// normally exists to stop. Missing-Origin requests are allowed through
+// (real browsers always send Origin on a WS upgrade; only non-browser
+// clients, e.g. this project's own test scripts, omit it).
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGIN
+  ? [process.env.ALLOWED_ORIGIN]
+  : ['http://localhost:5173', 'http://localhost:8787'];
+
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8787;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -53,9 +64,27 @@ const CHAT_FLAG_WINDOW_MS = 10 * 60 * 1000;
 const CHAT_FLAG_THRESHOLD = 5;
 const CHAT_MUTE_DURATION_MS = 60 * 1000;
 
+// Join-code entry rate limiting (PLAN.md Phase 4): 5 attempts per 15 min
+// per IP. Only counts fresh *code* entry (guessing) — resuming an existing
+// session via a stored token isn't an attempt to guess anything and
+// shouldn't burn a family's budget on every page reload.
+const CODE_RATE_CAPACITY = 5;
+const CODE_RATE_REFILL_PER_SECOND = 5 / (15 * 60);
+const codeRateLimiters = new Map<string, TokenBucket>();
+
+function codeRateLimiterFor(ip: string): TokenBucket {
+  let bucket = codeRateLimiters.get(ip);
+  if (!bucket) {
+    bucket = new TokenBucket(CODE_RATE_CAPACITY, CODE_RATE_REFILL_PER_SECOND);
+    codeRateLimiters.set(ip, bucket);
+  }
+  return bucket;
+}
+
 interface Connection {
   id: string;
   displayName: string;
+  codeHash: string;
   socket: WebSocket;
   rateLimiter: TokenBucket;
   moveLimiter: TokenBucket;
@@ -69,6 +98,11 @@ interface Connection {
 }
 
 const connections = new Map<WebSocket, Connection>();
+// One live connection per code, enforced at the application level so a
+// takeover (C5) can find and close the superseded socket. The DB-level
+// partial unique index (see db.ts) backs up the *session-row* invariant
+// independently, in case this map and reality ever disagree.
+const connectionsByCodeHash = new Map<string, Connection>();
 
 function send(socket: WebSocket, message: ServerMessage): void {
   if (socket.readyState === socket.OPEN) {
@@ -130,10 +164,22 @@ const httpServer = createServer((req, res) => {
   res.end('ok');
 });
 
-const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+const wss = new WebSocketServer({
+  server: httpServer,
+  path: '/ws',
+  verifyClient: (info, callback) => {
+    const origin = info.origin;
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(true);
+    } else {
+      callback(false, 403, 'origin not allowed');
+    }
+  },
+});
 
-wss.on('connection', (socket) => {
+wss.on('connection', (socket, request) => {
   let joined = false;
+  const ip = request.socket.remoteAddress ?? 'unknown';
 
   socket.on('message', (raw) => {
     let parsedJson: unknown;
@@ -161,13 +207,64 @@ wss.on('connection', (socket) => {
         return;
       }
 
-      // Dev-stub identity (Phases 1-3): `code` is present but unvalidated
-      // per contract #9; the client-supplied `name` is trusted directly.
-      // Phase 4 replaces this with a real join-code lookup.
-      const displayName = message.name?.trim() || `Player${Math.floor(Math.random() * 10000)}`;
+      // Real identity (PLAN.md Phase 4): exactly one of code / sessionToken
+      // resolves who's joining. Every failure path closes the socket —
+      // simpler to reason about than a half-joined socket left open for a
+      // retry, and the client just opens a fresh one to try again.
+      let displayName: string;
+      let codeHash: string;
+      let sessionToken: string;
+
+      if (message.sessionToken) {
+        const session = db.lookupSession(message.sessionToken);
+        if (!session) {
+          send(socket, { type: 'error', message: 'Session expired — please enter your code again.' });
+          socket.close();
+          return;
+        }
+        db.touchSession(session.tokenHash);
+        displayName = session.displayName;
+        codeHash = session.codeHash;
+        sessionToken = message.sessionToken;
+      } else if (message.code) {
+        if (!codeRateLimiterFor(ip).tryConsume()) {
+          send(socket, { type: 'error', message: 'Too many attempts — please try again later.' });
+          socket.close();
+          return;
+        }
+        const found = db.lookupJoinCode(message.code);
+        if (!found) {
+          send(socket, { type: 'error', message: 'Invalid code.' });
+          socket.close();
+          return;
+        }
+        displayName = found.displayName;
+        codeHash = found.codeHash;
+        // Also revokes any existing DB session row for this code (C5).
+        sessionToken = db.createSession(codeHash, displayName);
+      } else {
+        send(socket, { type: 'error', message: 'A code or session is required to join.' });
+        socket.close();
+        return;
+      }
+
+      // Session takeover (C5): at most one *live* connection per code.
+      // Never reject the incoming connection over this — school wifi drops
+      // constantly, and the new join always wins so a stranded child is
+      // never the one locked out.
+      const previous = connectionsByCodeHash.get(codeHash);
+      if (previous) {
+        send(previous.socket, { type: 'error', message: 'You joined from another device.' });
+        previous.socket.close();
+        connections.delete(previous.socket);
+        connectionsByCodeHash.delete(codeHash);
+        broadcast({ type: 'player-leave', id: previous.id });
+      }
+
       const conn: Connection = {
         id: randomUUID(),
         displayName,
+        codeHash,
         socket,
         rateLimiter: new TokenBucket(),
         moveLimiter: new TokenBucket(),
@@ -185,6 +282,7 @@ wss.on('connection', (socket) => {
       const existing = [...connections.values()];
 
       connections.set(socket, conn);
+      connectionsByCodeHash.set(codeHash, conn);
       joined = true;
 
       console.log(`[join] ${displayName} (${conn.id})`);
@@ -195,6 +293,7 @@ wss.on('connection', (socket) => {
         spawn: SPAWN,
         selfId: conn.id,
         selfName: displayName,
+        sessionToken,
       });
 
       for (const other of existing) {
@@ -342,6 +441,12 @@ wss.on('connection', (socket) => {
     if (conn) {
       console.log(`[leave] ${conn.displayName} (${conn.id})`);
       connections.delete(socket);
+      // Only clear the code->connection mapping if it's still pointing at
+      // this connection — a takeover may have already replaced it with a
+      // newer one before this (now-stale) socket's close event arrives.
+      if (connectionsByCodeHash.get(conn.codeHash) === conn) {
+        connectionsByCodeHash.delete(conn.codeHash);
+      }
       broadcast({ type: 'player-leave', id: conn.id });
     }
   });

@@ -83,6 +83,67 @@
       #chat-input.visible {
         display: block;
       }
+      #join-screen {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.75);
+        z-index: 20;
+        font-family: monospace;
+        color: white;
+      }
+      #join-screen.hidden {
+        display: none;
+      }
+      #join-box {
+        background: rgba(20, 20, 20, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        border-radius: 8px;
+        padding: 24px 28px;
+        text-align: center;
+        min-width: 260px;
+      }
+      #join-box h1 {
+        font-size: 16px;
+        margin: 0 0 16px;
+        font-weight: normal;
+      }
+      #join-code-input {
+        font-family: monospace;
+        font-size: 20px;
+        letter-spacing: 4px;
+        text-align: center;
+        text-transform: uppercase;
+        width: 180px;
+        padding: 8px;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        background: rgba(255, 255, 255, 0.05);
+        color: white;
+      }
+      #join-submit {
+        display: block;
+        margin: 12px auto 0;
+        font-family: monospace;
+        font-size: 14px;
+        padding: 6px 16px;
+        border-radius: 4px;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        background: rgba(255, 255, 255, 0.1);
+        color: white;
+        cursor: pointer;
+      }
+      #join-submit:hover {
+        background: rgba(255, 255, 255, 0.2);
+      }
+      #join-error {
+        min-height: 1.2em;
+        margin-top: 10px;
+        color: #ff8a8a;
+        font-size: 13px;
+      }
     </style>
   </head>
   <body>
@@ -90,6 +151,14 @@
     <div id="crosshair"></div>
     <div id="chat-log"></div>
     <input id="chat-input" type="text" maxlength="200" placeholder="Message… (Enter to send, Esc to cancel)" />
+    <div id="join-screen" class="hidden">
+      <div id="join-box">
+        <h1>Enter your join code</h1>
+        <input id="join-code-input" type="text" maxlength="6" autocomplete="off" autocapitalize="characters" />
+        <button id="join-submit" type="button">Join</button>
+        <div id="join-error"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

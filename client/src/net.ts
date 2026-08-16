@@ -26,19 +26,20 @@ export interface NetHandlers {
   onError: (msg: ErrorMsg) => void;
 }
 
+/** Exactly one of these identifies who's joining (PLAN.md Phase 4). */
+export type JoinPayload = { code: string } | { sessionToken: string };
+
 /** WebSocket client wrapper: handshake, schema-validated in/out, dispatch to handlers. */
 export class Net {
   private readonly socket: WebSocket;
 
-  constructor(displayName: string, private readonly handlers: NetHandlers) {
+  constructor(joinPayload: JoinPayload, private readonly handlers: NetHandlers) {
     const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
     this.socket = new WebSocket(`${wsProtocol}://${location.host}/ws`);
 
     this.socket.addEventListener('open', () => {
       this.handlers.onOpen();
-      // Dev-stub join (Phases 1-3): `code` is present but unvalidated by the
-      // server until Phase 4 — see shared/protocol.ts contract #9.
-      this.send({ type: 'join', protocolVersion: PROTOCOL_VERSION, code: 'dev', name: displayName });
+      this.send({ type: 'join', protocolVersion: PROTOCOL_VERSION, ...joinPayload });
     });
     this.socket.addEventListener('close', () => this.handlers.onClose());
     this.socket.addEventListener('message', (event) => this.handleMessage(event));

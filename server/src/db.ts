@@ -1,14 +1,21 @@
 import Database from 'better-sqlite3';
 import { CHUNK_FORMAT_VERSION, decodeChunk, encodeChunk } from '@game/shared';
+import {
+  SESSION_EXPIRY_MS,
+  generateJoinCode,
+  generateSessionToken,
+  hashWithPepper,
+  normalizeCode,
+} from './auth.js';
 
 /**
- * SQLite persistence — Phase 1 scope only: `chunks` + `block_changes`.
+ * SQLite persistence: `chunks` + `block_changes` (Phase 1), `chat_log`
+ * (Phase 3), `join_codes` + `sessions` (Phase 4).
  *
- * `block_changes` deliberately omits the `code_hash` FK to `join_codes`
- * from PLAN.md §6's full schema — join codes don't exist until Phase 4.
- * `display_name` is the only identity available during the dev-stub join
- * (Phases 1-3); Phase 4 adds `code_hash` via a migration once join_codes
- * exists.
+ * `block_changes` and `chat_log` still key identity by `display_name` alone
+ * rather than the `code_hash` FK PLAN.md §6's full schema calls for —
+ * that's a follow-up migration, not done here, since it's not required for
+ * Phase 4's "done when" criteria and touches already-shipped tables.
  *
  * Pure write-through (PLAN.md C6): every block change rewrites the whole
  * chunk blob and appends to block_changes in one transaction. No in-memory
@@ -66,9 +73,6 @@ export class GameDb {
       CREATE INDEX IF NOT EXISTS idx_bc_ts ON block_changes(ts);
       CREATE INDEX IF NOT EXISTS idx_bc_chunk_ts ON block_changes(chunk_x, chunk_z, ts);
 
-      -- Like block_changes, deliberately omits the code_hash FK to
-      -- join_codes from PLAN.md §6's full schema — join codes don't exist
-      -- until Phase 4. display_name is the only identity available now.
       CREATE TABLE IF NOT EXISTS chat_log (
         id               INTEGER PRIMARY KEY AUTOINCREMENT,
         ts               INTEGER NOT NULL,
@@ -79,6 +83,29 @@ export class GameDb {
         flag_reason      TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_chat_ts ON chat_log(ts);
+
+      CREATE TABLE IF NOT EXISTS join_codes (
+        code_hash    TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        created_at   INTEGER NOT NULL,
+        disabled     INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0,1)),
+        revoked_at   INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        token_hash    TEXT PRIMARY KEY,
+        code_hash     TEXT NOT NULL REFERENCES join_codes(code_hash),
+        display_name  TEXT NOT NULL,
+        created_at    INTEGER NOT NULL,
+        last_seen     INTEGER NOT NULL,
+        revoked       INTEGER NOT NULL DEFAULT 0 CHECK (revoked IN (0,1)),
+        revoke_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_sessions_code ON sessions(code_hash);
+      -- Enforces C5's invariant (at most one active session per code) even
+      -- if the application-level takeover logic in index.ts has a bug.
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_one_active
+        ON sessions(code_hash) WHERE revoked = 0;
     `);
   }
 
@@ -154,6 +181,75 @@ export class GameDb {
         params.flagged ? 1 : 0,
         params.flagReason
       );
+  }
+
+  /** Returns the plaintext code — the ONLY time it's ever available; only the hash is stored. */
+  createJoinCode(displayName: string): string {
+    const code = generateJoinCode();
+    this.db
+      .prepare(
+        `INSERT INTO join_codes (code_hash, display_name, created_at)
+         VALUES (?, ?, ?)`
+      )
+      .run(hashWithPepper(code), displayName, Date.now());
+    return code;
+  }
+
+  /** Resolves a plaintext code to its identity, or undefined if invalid/disabled. */
+  lookupJoinCode(code: string): { codeHash: string; displayName: string } | undefined {
+    const codeHash = hashWithPepper(normalizeCode(code));
+    const row = this.db
+      .prepare('SELECT display_name FROM join_codes WHERE code_hash = ? AND disabled = 0')
+      .get(codeHash) as { display_name: string } | undefined;
+    if (!row) return undefined;
+    return { codeHash, displayName: row.display_name };
+  }
+
+  /**
+   * Session takeover (PLAN.md C5): in one transaction, revoke any existing
+   * active session for this code (reason 'superseded'), then insert the
+   * new one. The partial unique index backs this up even if this method is
+   * ever bypassed. Returns the plaintext token — the only time it's ever
+   * available.
+   */
+  createSession(codeHash: string, displayName: string): string {
+    const token = generateSessionToken();
+    const tokenHash = hashWithPepper(token);
+    const now = Date.now();
+
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE sessions SET revoked = 1, revoke_reason = 'superseded'
+           WHERE code_hash = ? AND revoked = 0`
+        )
+        .run(codeHash);
+      this.db
+        .prepare(
+          `INSERT INTO sessions (token_hash, code_hash, display_name, created_at, last_seen)
+           VALUES (?, ?, ?, ?, ?)`
+        )
+        .run(tokenHash, codeHash, displayName, now, now);
+    });
+    tx();
+
+    return token;
+  }
+
+  /** Resolves a plaintext session token, or undefined if invalid/revoked/expired. */
+  lookupSession(token: string): { tokenHash: string; codeHash: string; displayName: string } | undefined {
+    const tokenHash = hashWithPepper(token);
+    const row = this.db
+      .prepare('SELECT code_hash, display_name, last_seen FROM sessions WHERE token_hash = ? AND revoked = 0')
+      .get(tokenHash) as { code_hash: string; display_name: string; last_seen: number } | undefined;
+    if (!row) return undefined;
+    if (Date.now() - row.last_seen > SESSION_EXPIRY_MS) return undefined;
+    return { tokenHash, codeHash: row.code_hash, displayName: row.display_name };
+  }
+
+  /** Sliding expiry: call whenever a session is actively used. */
+  touchSession(tokenHash: string): void {
+    this.db.prepare('UPDATE sessions SET last_seen = ? WHERE token_hash = ?').run(Date.now(), tokenHash);
   }
 
   close(): void {
