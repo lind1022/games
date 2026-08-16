@@ -5,7 +5,8 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-16:** Phases 0-5 are committed and pushed. Phase 5 (admin panel, plus a Reissue action
+**As of 2026-08-16:** Phases 0-5 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
+`f3e4edc`, `c6449b0`). Phase 5 (admin panel, plus a Reissue action
 and a raised chat-log display cap added after initial review) was scripted-end-to-end-tested against
 throwaway server instances rather than the product owner's real dev server, and committed on the
 product owner's go-ahead to move on — it does **not** carry an explicit manual-browser-pass
