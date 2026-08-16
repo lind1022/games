@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PLAYER_EYE_HEIGHT } from '@game/shared';
 import type { ClientWorld } from './world.js';
 
 /**
@@ -11,7 +12,6 @@ import type { ClientWorld } from './world.js';
 const PLAYER_HALF_WIDTH = 0.3;
 const PLAYER_HALF_DEPTH = 0.3;
 const PLAYER_HEIGHT = 1.8;
-const EYE_HEIGHT = 1.62;
 const MOVE_SPEED = 4.5; // m/s
 const JUMP_SPEED = 6.5; // m/s
 const GRAVITY = 20; // m/s^2
@@ -44,6 +44,11 @@ export class PlayerController {
   setSpawn(x: number, y: number, z: number): void {
     this.position.set(x, y, z);
     this.updateCamera();
+  }
+
+  /** Feet position + look angles, for broadcasting to the server (Phase 2 player-move). */
+  getState(): { x: number; y: number; z: number; yaw: number; pitch: number } {
+    return { x: this.position.x, y: this.position.y, z: this.position.z, yaw: this.yaw, pitch: this.pitch };
   }
 
   private onMouseMove(event: MouseEvent): void {
@@ -86,7 +91,7 @@ export class PlayerController {
   }
 
   private updateCamera(): void {
-    this.camera.position.set(this.position.x, this.position.y + EYE_HEIGHT, this.position.z);
+    this.camera.position.set(this.position.x, this.position.y + PLAYER_EYE_HEIGHT, this.position.z);
     this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
   }
 

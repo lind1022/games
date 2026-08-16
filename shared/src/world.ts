@@ -67,3 +67,12 @@ export function isWithinWorldBounds(
     isValidHeight(y)
   );
 }
+
+/**
+ * Gameplay constants shared between client and server so they can never
+ * drift apart (Phase 2): the client uses them to render/raycast, the
+ * server uses them to validate — e.g. reach-distance for block placement
+ * only means anything if both sides agree on where the eye actually is.
+ */
+export const PLAYER_EYE_HEIGHT = 1.62;
+export const REACH_DISTANCE = 6;

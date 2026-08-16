@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { REACH_DISTANCE } from '@game/shared';
 import type { ClientWorld } from './world.js';
 
 export interface RaycastHit {
@@ -8,8 +9,6 @@ export interface RaycastHit {
   /** Outward face normal of the hit block — placement target is hit + normal. */
   normal: { x: number; y: number; z: number };
 }
-
-const REACH_DISTANCE = 6;
 
 /** Amanatides & Woo voxel-grid DDA traversal — the standard algorithm for ray-vs-voxel targeting. */
 export function raycastVoxel(

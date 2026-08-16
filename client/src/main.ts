@@ -5,6 +5,7 @@ import { ClientWorld } from './world.js';
 import { ChunkRenderer } from './chunkRenderer.js';
 import { PlayerController } from './controls.js';
 import { raycastVoxel } from './raycast.js';
+import { RemotePlayers } from './remotePlayers.js';
 
 const statusEl = document.getElementById('app');
 if (!statusEl) throw new Error('missing #app element');
@@ -34,8 +35,10 @@ scene.add(sun);
 const world = new ClientWorld();
 const chunkRenderer = new ChunkRenderer(scene);
 const controller = new PlayerController(renderer.domElement, camera, world);
+const remotePlayers = new RemotePlayers(scene);
 
 const PLACEMENT_BLOCK = BLOCKS.STONE.id;
+const MOVE_SEND_INTERVAL_MS = 1000 / 12; // 12 Hz, within PLAN.md's 10-15 Hz target
 
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -46,12 +49,15 @@ function base64ToBytes(base64: string): Uint8Array {
 
 const displayName = `Player${Math.floor(Math.random() * 1000)}`;
 
+let joined = false;
+
 const net = new Net(displayName, {
   onOpen: () => {
     statusEl.textContent = 'Connected';
   },
   onClose: () => {
     statusEl.textContent = 'Disconnected — reload to reconnect';
+    joined = false;
   },
   onError: (msg) => {
     console.error('[server error]', msg.message);
@@ -64,6 +70,7 @@ const net = new Net(displayName, {
     }
     controller.setSpawn(msg.spawn.x, msg.spawn.y, msg.spawn.z);
     statusEl.textContent = `Connected as ${msg.selfName}`;
+    joined = true;
   },
   onBlockUpdate: (msg) => {
     // Applied only on the server's broadcast — the client never writes
@@ -72,6 +79,20 @@ const net = new Net(displayName, {
     const { chunkX, chunkZ } = worldToChunk(msg.x, msg.z);
     const blocks = world.getChunkBlocks(chunkX, chunkZ);
     if (blocks) chunkRenderer.updateChunk(chunkX, chunkZ, blocks);
+  },
+  onPlayerJoin: () => {
+    // Announcement only — the entity is created lazily by the first
+    // player-state (which carries position and name), see onPlayerState.
+  },
+  onPlayerLeave: (msg) => {
+    remotePlayers.remove(msg.id);
+  },
+  onPlayerState: (msg) => {
+    if (!remotePlayers.has(msg.id)) {
+      remotePlayers.add(msg.id, msg.name, msg.position.x, msg.position.y, msg.position.z, msg.yaw);
+    } else {
+      remotePlayers.updateState(msg.id, msg.position.x, msg.position.y, msg.position.z, msg.yaw);
+    }
   },
 });
 
@@ -96,12 +117,25 @@ renderer.domElement.addEventListener('mousedown', (event) => {
 renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefault());
 
 let lastTime = performance.now();
+let lastMoveSend = 0;
 function tick(now: number): void {
   const dt = Math.min((now - lastTime) / 1000, 0.1);
   lastTime = now;
 
   controller.update(dt);
+  remotePlayers.tick();
   renderer.render(scene, camera);
+
+  if (joined && now - lastMoveSend >= MOVE_SEND_INTERVAL_MS) {
+    lastMoveSend = now;
+    const state = controller.getState();
+    net.send({
+      type: 'player-move',
+      position: { x: state.x, y: state.y, z: state.z },
+      yaw: state.yaw,
+      pitch: state.pitch,
+    });
+  }
 
   requestAnimationFrame(tick);
 }
