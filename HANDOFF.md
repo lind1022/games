@@ -5,9 +5,11 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-16:** Phases 0-4 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
-`f3e4edc`). Phase 4's join screen was confirmed working in a real browser pass by the product owner.
-Phase 5 (admin panel) is next — see §6.
+**As of 2026-08-16:** Phases 0-5 are committed and pushed. Phase 5 (admin panel, plus a Reissue action
+and a raised chat-log display cap added after initial review) was scripted-end-to-end-tested against
+throwaway server instances rather than the product owner's real dev server, and committed on the
+product owner's go-ahead to move on — it does **not** carry an explicit manual-browser-pass
+confirmation the way Phases 1-4 do (see §3). Phase 6 (deploy, durability, backups) is next — see §6.
 
 ---
 
@@ -168,8 +170,7 @@ Replaces the dev-stub join with real identity, per PLAN.md and the C5 session-ta
   insert the new one — this is C5's DB-side half) /`lookupSession` (checks `revoked = 0` **and**
   sliding-expiry) /`touchSession`. Plaintext code/token are only ever returned once, at creation.
 - **`server/src/createCode.ts`** (new CLI) — `npm run create-code -w server -- "Jack"` prints a
-  plaintext code once. There's no admin panel yet (Phase 5), so this is the only way to issue a code
-  until then.
+  plaintext code once. Predates the Phase 5 admin panel below, which now does this too, with a UI.
 - **`server/src/index.ts`** — `verifyClient` validates the WS upgrade's `Origin` header against an
   allowlist (env-configurable, defaults to the local dev origins) — explicitly framed as
   defense-in-depth, not the primary guard, since the whole reason the session token lives in
@@ -193,6 +194,63 @@ Replaces the dev-stub join with real identity, per PLAN.md and the C5 session-ta
 - **`client/src/net.ts`** — `Net`'s constructor now takes a `JoinPayload` (`{ code }` or
   `{ sessionToken }`) instead of a display name; the display name was always dev-stub-only, and now
   there's nothing for the client to supply.
+
+### Phase 5 — admin panel
+Code management and moderation without shell access, per PLAN.md — real login, create/list/revoke
+codes, live online-players list, chat log review, and the four named moderation actions:
+
+- **`server/src/adminAuth.ts`** (new) — single-admin auth: no user table, since this project has
+  exactly one admin role. The password hash lives in `ADMIN_PASSWORD_HASH` (an env var, produced by
+  the new `hashAdminPassword.ts` CLI), which sidesteps "how do you create the first admin account"
+  entirely — confirmed `argon2` (the native addon, same install pattern as `better-sqlite3`) builds
+  and verifies correctly in this environment before committing to it over PLAN.md's alternative
+  suggestion of a plain `scrypt` fallback. Sessions are **in-memory only, never persisted to the
+  DB** — losing them on a restart just means logging in again, a fine trade for not writing admin
+  session material to disk.
+- **`server/src/adminApi.ts`** (new) — hand-rolled routing over `/admin/api/*` (no framework; a
+  handful of routes doesn't need one). Every route except `/login` and `/session` requires a valid
+  session cookie. Login is rate-limited 5/15min per IP (PLAN.md: "an unauthenticated admin panel is
+  worse than none"). Takes an `AdminDeps` interface rather than reaching into `index.ts`'s state
+  directly, so the routing/HTTP-plumbing logic stays testable independent of the live connection
+  maps.
+- **`server/src/db.ts`** — added `join_codes.muted` (moderation mute lives on the *code*, not the
+  session, so it survives reconnects — not in PLAN.md §6's original sketch, but "mute" is one of the
+  four named actions and has to be stored somewhere durable); `listJoinCodes`, `isMuted`,
+  `setCodeMuted`; `revokeJoinCode` (disables the code **and** revokes its active session in one
+  transaction — the DB-persistence half of "revoking a code both blocks reuse and kills the live
+  session"); `getChatLog` (flagged-only / per-player filters); `getRecentBlockChanges` (a player's
+  edits in the last N minutes, most-recent-first — feeds rollback).
+- **`server/src/index.ts`** — the `AdminDeps` implementation lives here (not in `adminApi.ts`)
+  because it needs direct access to the same in-memory `connections`/`connectionsByCodeHash` state
+  the WS handlers use. `kickPlayer` sends a friendly notice then closes the socket (code stays
+  valid — they can rejoin). `mutePlayerByCode` sets the DB flag and, if the player is currently
+  connected, tells them live. `revokeCode` calls the DB revoke, then also kicks any live connection
+  for that code (the live-connection half revoke needs, mirroring Phase 4's takeover kick).
+  `reissueCode` (added after the product owner noticed there's no way to recover a lost code, since
+  plaintext codes are never stored — see below) shares that same revoke-and-kick step via a small
+  `revokeCodeAndKick` helper, then creates a fresh code for the same display name in one action.
+  `rollbackPlayer` walks a player's `block_changes` rows in reverse-chronological order, calling
+  `world.setBlock` with each row's `old_block_id` and broadcasting the restore live — processing
+  **every** row in the window (not just the latest per coordinate) is what correctly unwinds a
+  sequence of edits back to the state before any of them happened. The chat-message handler now
+  checks `db.isMuted` — **after** logging the message (PLAN.md's "done when" is explicit: a muted
+  child's messages "stop reaching others but still log," not that they vanish entirely) and before
+  broadcasting; the sender is always told, never silently dropped.
+- **`server/public/admin.html`** (new) — a single self-contained HTML+CSS+plain-JS page (no build
+  step, no TypeScript — deliberately, since this is an internal tool and adding a second bundler
+  target for it isn't worth it), served directly by the Node server at `/admin`. Login form; codes
+  table with create/mute/unmute/**reissue**/revoke; online-players table with kick, polled every 3s;
+  a chat log viewer (flagged-only checkbox, player-name filter, fetches up to 500 rows — matching
+  `adminApi.ts`'s own hard ceiling on the `limit` query param — this is a **display** cap only, not
+  retention: `chat_log` itself is never pruned, keeping CLAUDE.md §7's "full chat logging for review"
+  intact); a rollback form. All state changes go through `fetch()` against `/admin/api/*` with
+  `credentials: 'same-origin'`.
+- **Why reissue exists:** since join codes are hashed at rest and never stored in recoverable form
+  (by design — see Phase 4), there was no way to recover a lost code short of Revoke-then-Create as
+  two separate steps. Reissue does both atomically from one button, for the same display name.
+- **`server/src/hashAdminPassword.ts`** (new CLI) — `npm run hash-admin-password -w server --
+  "<password>"` prints an `ADMIN_PASSWORD_HASH` value to set as an env var. The plaintext password
+  is never stored anywhere.
 
 ---
 
@@ -249,6 +307,47 @@ No browser automation tool was available in this session either. Server-side ide
 takeover, rate limiting, and DB persistence were scripted-E2E-verified first (§4); the product owner
 then tested the join screen itself directly (invalid code, valid code, reload-to-resume, second-tab
 takeover) and confirmed it all works.
+
+### Phase 5 — committed on the product owner's go-ahead
+No browser automation tool was available in this session. Every admin action was verified end-to-end
+via `fetch`/`WebSocket` against **throwaway server instances** on separate ports with temporary
+`DATA_DIR`s (§4) — specifically so the product owner's actual running dev server, with its real test
+data, was never touched by this testing. The product owner reviewed the work and directed moving on
+to Phase 6 without walking the manual checklist step-by-step in this session — unlike Phases 1-4, this
+one does **not** carry an explicit "tried it in a browser, works" confirmation. If anything about the
+admin page itself (as opposed to the actions it drives, which are scripted-verified) turns out to be
+off, that's the first place to look.
+
+The checklist below is preserved for whenever that manual pass does happen. To try it, the
+*currently-running* `npm run dev` doesn't have `ADMIN_PASSWORD_HASH` set (env vars are fixed at
+process launch), so either stop it and restart with the var set, or run a second instance on a spare
+port:
+
+```sh
+npm run hash-admin-password -w server -- "<pick a password>"
+# copy the printed ADMIN_PASSWORD_HASH= line, then:
+ADMIN_PASSWORD_HASH='<paste the hash>' npm run dev
+```
+
+Then visit **http://localhost:5173/../admin** — i.e. **http://localhost:8787/admin** directly (the
+admin page is served by the game server, not through Vite's dev proxy, so it's on port 8787 not 5173).
+Suggested checklist:
+- Log in with the wrong password (see an error), then the right one (see the dashboard).
+- Create a code for a test name; the plaintext code banner appears once. Join in a separate browser
+  tab with that code (see the join-code screen from Phase 4) and confirm the player appears in the
+  admin page's "Online now" list within ~3s (it polls).
+- Mute that player from the admin page; in their game tab, try sending a chat message and confirm they
+  see a "muted" notice in their chat log rather than the message just vanishing. Unmute and confirm
+  chat works again.
+- Kick that player; confirm their game tab disconnects within a couple seconds.
+- Have them rejoin (code still valid after a kick), place a couple of blocks, then use the rollback
+  form for their name over a few minutes; confirm the blocks disappear live in their game tab.
+- Click **Reissue** for that player instead of Revoke: confirm a new-code banner appears, their game
+  tab disconnects, the old code no longer works, and the new code joins them back in under the same
+  display name.
+- Revoke a (different) code; confirm the game tab disconnects **and** that code can no longer be used
+  to join at all (not even a fresh connection).
+- Check the chat log viewer renders sensibly with the flagged-only filter and a player-name filter.
 
 ---
 
@@ -344,8 +443,26 @@ None of this used a real GPU/display — that gap was closed by §3's Phase 1 ma
   elements — worked around throughout `main.ts` by rebinding to a definitely-non-null `const` right
   after each guard, the standard idiom for this TS limitation).
 
+**Phase 5 additions** (via `fetch`/`WebSocket` against a throwaway server instance on a separate port
+with a temporary `DATA_DIR` — never the product owner's real running dev server or its data):
+- Auth: unauthenticated requests to any protected route get `401`; a wrong password gets `401` and no
+  cookie; the right password sets a session cookie and `/session` reports `authenticated: true`;
+  `/logout` invalidates the session immediately (a subsequent request is `401` again); hammering
+  `/login` with wrong passwords trips the same 5/15min-per-IP rate limiter Phase 4's code-entry uses.
+- Full moderation loop against a **real WebSocket connection**, not just direct DB calls: create a
+  code via the admin API → join with it (real client join, not a DB shortcut) → confirm the player
+  shows up in `/admin/api/players` → **mute** → confirm the muted player is notified live *and* that
+  their next chat attempt is rejected (told, not silently dropped) *and* still lands in `chat_log` per
+  PLAN's exact "done when" wording → **unmute** → confirm chat works again → **kick** → confirm the
+  socket actually closes → rejoin (code still valid) → place a block → **rollback** → confirm the
+  block is restored **and** the restore is broadcast live to the still-connected player → **revoke** →
+  confirm the live connection is disconnected *and* the same code can no longer be used to join at all.
+- Confirmed the admin HTML page itself is served correctly at `GET /admin` (200, real HTML content).
+- `tsc -b` clean across all packages.
+
 **Still not covered by anything automated:** actual rendering correctness (§3 Phase 2), the chat UI's
-interactive behavior (§3 Phase 3), and the join screen (§3 Phase 4).
+interactive behavior (§3 Phase 3), the join screen (§3 Phase 4), and the admin page's actual UI
+(§3 Phase 5) — every admin *action* above was driven directly, not by clicking through the real page.
 
 ---
 
@@ -363,20 +480,29 @@ interactive behavior (§3 Phase 3), and the join screen (§3 Phase 4).
 
 ---
 
-## 6. Next up: Phase 5 (per PLAN.md)
+## 6. Next up: Phase 6 (per PLAN.md)
 
-Phases 0-4 are all committed, pushed, and confirmed in a real browser. Two things worth doing before
-real kids ever get a code, not blocking Phase 5 itself:
+Phases 0-5 are committed and pushed. Phase 5's admin **page** itself (as opposed to the actions it
+drives, which are scripted-verified — §4) still hasn't had an explicit manual-browser confirmation;
+§3's checklist is there whenever that happens.
+
+Two things worth doing before real kids ever get a code, not blocking Phase 6 itself:
 - **Seed `chatFilter.ts`'s `WHITELIST`** with real children's names and school-specific vocabulary
   once real codes exist — it's still empty; PLAN.md flags this as a critical pre-launch step.
-- **Set a real `JOIN_CODE_PEPPER`** before any deployment a real child could reach — every environment
-  currently falls back to the same hardcoded insecure default if the env var is unset.
+- **Set real, distinct secrets** (`JOIN_CODE_PEPPER`, `ADMIN_PASSWORD_HASH`) before any deployment a
+  real child or the public internet could reach — every environment currently falls back to the same
+  hardcoded insecure pepper if unset, and the admin panel is simply unreachable without the password
+  hash set (safe-by-default, but worth confirming deliberately rather than discovering it locked out).
 
-Phase 5 is the admin panel: code management and moderation without shell access, for an admin who's
-usually offline. Per PLAN.md — real admin login first (argon2id password, httpOnly+Secure+SameSite
-cookie, rate-limited: an unauthenticated admin panel is worse than none); create/list/revoke codes
-(replacing the `create-code` CLI); live online-players list (the `GET /players` endpoint from Phase 2
-becomes real UI here); chat log review with a flagged-only filter and per-player context; four
-distinct moderation actions — kick (disconnect, code still valid), mute (chat-only, and the muted
-child is told, not silently dropped), revoke (disable + disconnect + unusable), and rollback
-("undo player X's changes in the last N minutes", using `block_changes`' pre-images).
+Phase 6 is deploy, durability, and backups — the last phase before this can safely go live for real:
+Railway project + a volume mounted at `DATA_DIR` (never a hardcoded path); a **boot-time assertion**
+that `DATA_DIR` is writable and actually on the mounted volume — PLAN.md calls this out as "the single
+most dangerous Railway+SQLite footgun" (silent total world loss on every redeploy if the volume isn't
+really attached); `GET /health`; restart policy `ALWAYS`; bind `0.0.0.0:$PORT`; a `PRAGMA user_version`
+migration runner (note: `db.ts`'s current `ensureColumn`-style ad hoc migration, added this session for
+`join_codes.muted`, is exactly the kind of thing a real migration runner should absorb once one
+exists); the dirty-chunk flush + flush-on-SIGTERM + crash-recovery replay optimization deferred since
+Phase 1 (C6) — Phase 1-5 have all used pure write-through, which is correct but not what ships to
+production; backups via `VACUUM INTO` **only** (never a raw file copy, which misses the WAL sidecar
+under concurrent writes) shipped off-box on a schedule; a rehearsed restore. Production deploy should
+wait until this phase is done so it isn't an open door before it's durable. Full spec: PLAN.md → Phase 6.

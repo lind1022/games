@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "create-code": "tsx src/createCode.ts"
+    "create-code": "tsx src/createCode.ts",
+    "hash-admin-password": "tsx src/hashAdminPassword.ts"
   },
   "dependencies": {
     "@game/shared": "*",
+    "argon2": "^0.45.1",
     "better-sqlite3": "^11.7.0",
     "obscenity": "^0.4.6",
     "ws": "^8.18.0"

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,7 @@ import {
   type ChunkData,
   type ServerMessage,
 } from '@game/shared';
+import { handleAdminApi, type AdminDeps } from './adminApi.js';
 import { filterChatMessage } from './chatFilter.js';
 import { GameDb } from './db.js';
 import { TokenBucket } from './rateLimit.js';
@@ -37,6 +38,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../');
 const DATA_DIR = process.env.DATA_DIR ?? path.join(REPO_ROOT, 'data');
 const DB_PATH = path.join(DATA_DIR, 'world.db');
+// server/public sits alongside src/ and dist/, so this resolves correctly
+// whether running from source (tsx, dev) or the compiled dist/ (prod).
+const ADMIN_HTML_PATH = path.join(__dirname, '../public/admin.html');
 
 mkdirSync(DATA_DIR, { recursive: true });
 
@@ -139,6 +143,86 @@ function playerStateMessage(conn: Connection): ServerMessage {
   };
 }
 
+function findConnectionById(id: string): Connection | undefined {
+  for (const conn of connections.values()) {
+    if (conn.id === id) return conn;
+  }
+  return undefined;
+}
+
+function getOnlinePlayers(): { id: string; name: string }[] {
+  return [...connections.values()].map((c) => ({ id: c.id, name: c.displayName }));
+}
+
+// PLAN.md Phase 5 admin actions. Live here (not adminApi.ts) because they
+// need direct access to the same in-memory connection state the WS handlers
+// use — adminApi.ts only knows the AdminDeps interface, not this module's
+// internals.
+
+/** Shared by revoke and reissue: disable the code, and kick+notify its live connection if any. */
+function revokeCodeAndKick(codeHash: string): void {
+  db.revokeJoinCode(codeHash);
+  const conn = connectionsByCodeHash.get(codeHash);
+  if (conn) {
+    send(conn.socket, { type: 'error', message: 'Your access has been revoked by an admin.' });
+    conn.socket.close();
+    connections.delete(conn.socket);
+    connectionsByCodeHash.delete(codeHash);
+    broadcast({ type: 'player-leave', id: conn.id });
+  }
+}
+
+const adminDeps: AdminDeps = {
+  db,
+  getOnlinePlayers,
+  kickPlayer(id) {
+    const conn = findConnectionById(id);
+    if (!conn) return false;
+    send(conn.socket, {
+      type: 'error',
+      message: 'An admin has disconnected you. Your code still works — you can rejoin.',
+    });
+    conn.socket.close();
+    return true;
+  },
+  mutePlayerByCode(codeHash, muted) {
+    db.setCodeMuted(codeHash, muted);
+    const conn = connectionsByCodeHash.get(codeHash);
+    if (conn) {
+      send(conn.socket, {
+        type: 'error',
+        message: muted ? 'An admin has muted your chat.' : 'Your chat has been unmuted.',
+      });
+    }
+  },
+  revokeCode(codeHash) {
+    revokeCodeAndKick(codeHash);
+  },
+  reissueCode(codeHash) {
+    const existing = db.listJoinCodes().find((c) => c.codeHash === codeHash);
+    if (!existing) return undefined;
+    revokeCodeAndKick(codeHash);
+    const code = db.createJoinCode(existing.displayName);
+    return { code, displayName: existing.displayName };
+  },
+  rollbackPlayer(displayName, minutes) {
+    const sinceMs = Date.now() - minutes * 60 * 1000;
+    const changes = db.getRecentBlockChanges(displayName, sinceMs);
+    for (const change of changes) {
+      world.setBlock(change.x, change.y, change.z, change.oldBlockId, 'admin-rollback');
+      broadcast({
+        type: 'block-update',
+        x: change.x,
+        y: change.y,
+        z: change.z,
+        blockId: change.oldBlockId,
+        by: 'admin-rollback',
+      });
+    }
+    return changes.length;
+  },
+};
+
 function chunksForWorldState(): ChunkData[] {
   return world.allChunks().map(({ chunkX, chunkZ, blocks }) => ({
     chunkX,
@@ -149,14 +233,30 @@ function chunksForWorldState(): ChunkData[] {
 }
 
 const httpServer = createServer((req, res) => {
-  // Unauthenticated on purpose for now: display names are already visible to
-  // every connected player via player-join/player-state, so this adds no new
-  // exposure. Phase 5's admin panel gates the real moderation surface behind
-  // real auth — this is just the "near-free" plumbing PLAN.md Phase 2 flags.
+  // Unauthenticated on purpose: display names are already visible to every
+  // connected player via player-join/player-state, so this adds no new
+  // exposure. It's the "near-free" plumbing PLAN.md Phase 2 flags — the
+  // real moderation surface is /admin, gated behind real auth (Phase 5).
   if (req.method === 'GET' && req.url === '/players') {
-    const online = [...connections.values()].map((c) => ({ id: c.id, name: c.displayName }));
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(online));
+    res.end(JSON.stringify(getOnlinePlayers()));
+    return;
+  }
+
+  if (req.method === 'GET' && (req.url === '/admin' || req.url === '/admin/')) {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end(readFileSync(ADMIN_HTML_PATH));
+    return;
+  }
+
+  if (req.url?.startsWith('/admin/api/')) {
+    handleAdminApi(req, res, adminDeps).catch((err: unknown) => {
+      console.error('[admin] request failed', err);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'internal error' }));
+      }
+    });
     return;
   }
 
@@ -428,6 +528,17 @@ wss.on('connection', (socket, request) => {
           conn.chatMutedUntil = now + CHAT_MUTE_DURATION_MS;
           conn.recentFlagTimestamps = [];
         }
+      }
+
+      // Admin-issued mute (PLAN.md Phase 5): the message is still logged
+      // above (an admin reviewing the log should see what a muted child is
+      // still trying to say) but doesn't reach anyone. Tell the sender —
+      // never fail silently. Distinct from the self-expiring flood-mute
+      // above: this one persists until an admin lifts it, and lives on the
+      // code (join_codes.muted) so it survives reconnects.
+      if (db.isMuted(conn.codeHash)) {
+        send(socket, { type: 'error', message: 'An admin has muted your chat.' });
+        return;
       }
 
       // Broadcast to everyone, including the sender, so they see the same
