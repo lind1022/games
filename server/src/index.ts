@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -38,11 +38,36 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../');
 const DATA_DIR = process.env.DATA_DIR ?? path.join(REPO_ROOT, 'data');
 const DB_PATH = path.join(DATA_DIR, 'world.db');
-// server/public sits alongside src/ and dist/, so this resolves correctly
-// whether running from source (tsx, dev) or the compiled dist/ (prod).
 const ADMIN_HTML_PATH = path.join(__dirname, '../public/admin.html');
+// PLAN.md Phase 0: "one same-origin path works in dev and prod." In dev,
+// Vite's own server handles the client and proxies /ws here. In prod there
+// is no Vite server — this process serves the client's `vite build` output
+// itself, so one process on one port is the whole deployable unit.
+const CLIENT_DIST_PATH = path.join(REPO_ROOT, 'client/dist');
 
 mkdirSync(DATA_DIR, { recursive: true });
+
+// PLAN.md Phase 6 risk table calls this "the single most dangerous
+// Railway+SQLite footgun": if a volume isn't really mounted at DATA_DIR,
+// writes silently land on ephemeral local disk and vanish on the next
+// redeploy. Fail loudly at boot instead of discovering it the hard way —
+// refusing to start with no world is far better than starting and quietly
+// not persisting one.
+function assertDataDirWritable(dir: string): void {
+  const canaryPath = path.join(dir, '.write-test');
+  try {
+    writeFileSync(canaryPath, String(Date.now()));
+    unlinkSync(canaryPath);
+  } catch (err) {
+    console.error(
+      `[server] FATAL: DATA_DIR (${dir}) is not writable — refusing to start. ` +
+        'This usually means a volume mount is missing or misconfigured.',
+      err
+    );
+    process.exit(1);
+  }
+}
+assertDataDirWritable(DATA_DIR);
 
 const db = new GameDb(DB_PATH);
 const world = new World(db);
@@ -232,7 +257,68 @@ function chunksForWorldState(): ChunkData[] {
   }));
 }
 
+const CLIENT_MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'text/javascript',
+  '.mjs': 'text/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.wasm': 'application/wasm',
+};
+
+/**
+ * Serves the client's `vite build` output if present, falling back to the
+ * app shell (`index.html`) for any path that isn't a real built asset —
+ * this is a single-page app with no client-side routing, so every
+ * unmatched GET should still load the game, not 404. Returns false (and
+ * serves nothing) if no build exists, which is the normal case in dev,
+ * where Vite's own dev server handles the client instead.
+ */
+function serveClientStatic(req: IncomingMessage, res: ServerResponse): boolean {
+  const indexPath = path.join(CLIENT_DIST_PATH, 'index.html');
+  if (!existsSync(indexPath)) return false;
+
+  const urlPath = new URL(req.url ?? '/', 'http://localhost').pathname;
+  let filePath = path.join(CLIENT_DIST_PATH, path.normalize(urlPath));
+
+  // Traversal guard: resolved path must stay inside CLIENT_DIST_PATH.
+  if (!filePath.startsWith(CLIENT_DIST_PATH)) {
+    filePath = indexPath;
+  } else if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
+    filePath = indexPath;
+  }
+
+  const contentType = CLIENT_MIME_TYPES[path.extname(filePath)] ?? 'application/octet-stream';
+  res.writeHead(200, { 'content-type': contentType });
+  res.end(readFileSync(filePath));
+  return true;
+}
+
 const httpServer = createServer((req, res) => {
+  // PLAN.md Phase 6: a host's restart policy (e.g. Railway's ALWAYS) needs
+  // something to poll. Checks the DB connection is actually alive, not just
+  // that the HTTP server is accepting sockets.
+  if (req.method === 'GET' && req.url === '/health') {
+    try {
+      db.healthCheck();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      console.error('[health] DB check failed', err);
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false }));
+    }
+    return;
+  }
+
   // Unauthenticated on purpose: display names are already visible to every
   // connected player via player-join/player-state, so this adds no new
   // exposure. It's the "near-free" plumbing PLAN.md Phase 2 flags — the
@@ -257,6 +343,10 @@ const httpServer = createServer((req, res) => {
         res.end(JSON.stringify({ error: 'internal error' }));
       }
     });
+    return;
+  }
+
+  if (req.method === 'GET' && serveClientStatic(req, res)) {
     return;
   }
 
@@ -563,11 +653,29 @@ wss.on('connection', (socket, request) => {
   });
 });
 
-httpServer.listen(PORT, () => {
+// Explicit 0.0.0.0 (PLAN.md Phase 6): some hosts require binding all
+// interfaces explicitly rather than relying on the default.
+httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(
     `[server] listening on http://localhost:${PORT} (protocol v${PROTOCOL_VERSION}, world ${WORLD_CHUNKS}x${WORLD_CHUNKS} chunks)`
   );
 });
+
+// Periodic backups (PLAN.md Phase 6: every 6h, VACUUM INTO — never a raw
+// file copy, which can miss the WAL sidecar under concurrent writes and
+// produce an inconsistent snapshot). This only writes locally, under
+// DATA_DIR/backups/ — shipping backups off-box (R2/S3) needs real cloud
+// storage credentials and is a deliberately separate, not-yet-done step
+// (see HANDOFF.md).
+const BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+setInterval(() => {
+  try {
+    const backupPath = db.backup(path.join(DATA_DIR, 'backups'));
+    console.log(`[backup] wrote ${backupPath}`);
+  } catch (err) {
+    console.error('[backup] failed', err);
+  }
+}, BACKUP_INTERVAL_MS);
 
 function shutdown(): void {
   console.log('[server] shutting down');

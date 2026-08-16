@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
 import { CHUNK_FORMAT_VERSION, decodeChunk, encodeChunk } from '@game/shared';
 import {
   SESSION_EXPIRY_MS,
@@ -113,13 +115,42 @@ export class GameDb {
         ON sessions(code_hash) WHERE revoked = 0;
     `);
 
-    // CREATE TABLE IF NOT EXISTS is a no-op on a table that already exists —
-    // it does NOT add new columns to it. `join_codes` shipped in Phase 4
-    // without `muted`; Phase 5 added the column to the CREATE TABLE above,
-    // which only takes effect for a brand-new DB file. Anyone upgrading an
-    // existing world.db needs this explicit migration or every muted/unmute
-    // call fails with "no such column: muted".
-    this.ensureColumn('join_codes', 'muted', 'muted INTEGER NOT NULL DEFAULT 0');
+    this.runMigrations();
+  }
+
+  /**
+   * Migration runner on `PRAGMA user_version` (PLAN.md Phase 6). CREATE
+   * TABLE IF NOT EXISTS above brings a brand-new DB fully up to date in one
+   * step (including every column ever added), so migrations only need to
+   * cover bringing an *older, already-existing* DB forward — each one is a
+   * no-op against a fresh database. `user_version` tracks how far an
+   * existing DB has been brought forward, so a migration never reruns once
+   * applied.
+   *
+   * Replaces the ad hoc, unconditional `ensureColumn` call this used before
+   * Phase 6 — that one worked (verified against a copy of a real Phase-4
+   * database before shipping it) but had no way to track "already applied"
+   * and would have needed a new unconditional call site for every future
+   * schema change.
+   */
+  private readonly migrations: { version: number; apply: () => void }[] = [
+    {
+      version: 1,
+      apply: () => this.ensureColumn('join_codes', 'muted', 'muted INTEGER NOT NULL DEFAULT 0'),
+    },
+  ];
+
+  private runMigrations(): void {
+    const currentVersion = this.db.pragma('user_version', { simple: true }) as number;
+    for (const migration of this.migrations) {
+      if (migration.version > currentVersion) {
+        migration.apply();
+      }
+    }
+    const latest = this.migrations.at(-1)?.version ?? 0;
+    if (latest > currentVersion) {
+      this.db.pragma(`user_version = ${latest}`);
+    }
   }
 
   private ensureColumn(table: string, column: string, addColumnDef: string): void {
@@ -363,6 +394,26 @@ export class GameDb {
       )
       .all(displayName, sinceMs) as { x: number; y: number; z: number; old_block_id: number }[];
     return rows.map((r) => ({ x: r.x, y: r.y, z: r.z, oldBlockId: r.old_block_id }));
+  }
+
+  /** Throws if the DB connection is unusable — feeds GET /health (PLAN.md Phase 6). */
+  healthCheck(): void {
+    this.db.prepare('SELECT 1').get();
+  }
+
+  /**
+   * Writes a consistent point-in-time snapshot via `VACUUM INTO` (PLAN.md
+   * Phase 6) — never a raw file copy, which under WAL can miss the `-wal`
+   * sidecar and produce an inconsistent snapshot. Returns the path written.
+   * Local only: shipping this off-box (R2/S3) is a separate, not-yet-done
+   * step that needs real cloud storage credentials.
+   */
+  backup(dir: string): string {
+    mkdirSync(dir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(dir, `world-${timestamp}.db`);
+    this.db.exec(`VACUUM INTO '${backupPath}'`);
+    return backupPath;
   }
 
   close(): void {

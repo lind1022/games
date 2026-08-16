@@ -183,16 +183,22 @@ against this section.
 > shared contracts (block ids, chunk format, coordinates), schema SQL, risks, and open questions.
 > This file stays the durable spec; PLAN.md is the working plan and changes as work progresses.
 
-> _Commands to be filled in once the project is scaffolded (PLAN.md Phase 0)._ Until then, no
-> build/test/run commands exist.
-
-Planned conventions (proposed):
-- `npm run dev` — run client + server locally for development.
-- `npm run build` — production build.
-- `npm test` — automated tests.
+Commands (npm workspaces monorepo — `shared` / `server` / `client` / `tools`):
+- `npm run dev` — client (Vite, :5173) + server (`tsx watch`, :8787) concurrently, Vite proxying `/ws`.
+- `npm run build` — builds the client only (`vite build` → `client/dist`). The server has no separate
+  build step — it runs directly off TypeScript source via `tsx` in both dev and production, and in
+  production also serves `client/dist` itself (one process, one port — see [DEPLOY.md](DEPLOY.md)).
+- `npm start` — runs the production server (`tsx src/index.ts` under the hood). Requires `npm run
+  build` to have been run first if you want the game client reachable, not just the API/admin panel.
+- `npm run typecheck` — `tsc -b` across all four workspace packages.
+- `npm run create-code -w server -- "<name>"` — issue a join code from the CLI (or use `/admin`).
+- `npm run hash-admin-password -w server -- "<password>"` — produces an `ADMIN_PASSWORD_HASH` value.
+- No automated test suite exists yet (no framework chosen) — verification has been scripted
+  ad hoc smoke tests, run and discarded per change; see HANDOFF.md for what's been covered.
 - Prefer small, reviewable commits. Do not commit the `/data` directory.
 
-**Current state:** empty repository. The first coding task is to scaffold the stack in §3.
+**Current state:** Phases 0-5 built (scaffolding, vertical slice, multiplayer, chat, join codes,
+admin panel); Phase 6 (deploy/durability/backups) in progress. See PLAN.md and HANDOFF.md.
 
 ---
 
@@ -207,12 +213,12 @@ Planned conventions (proposed):
 6. **Chat style** — **free text** (with §7 filtering + logging).
 7. **Build permissions** — **anyone can build anywhere** (no protected zones).
 8. **Game feel** — **pure creative / build-only**.
-9. **Hosting** — recommendation delivered: **Railway (~$5/mo)** preferred, **Hetzner CX22 (~$4.60/mo)**
-   for best value. **Final pick still to choose** by the product owner.
+9. **Hosting** — **Railway**, confirmed 2026-08-16. See [DEPLOY.md](DEPLOY.md) for the deploy process.
+10. **One active session per code** — confirmed yes: joining from a new device takes over the old
+    session with a friendly message (never a hard lockout). Implemented and tested, Phase 4.
 
-**Small items to confirm during scaffolding:**
+**Small items still open:**
 - **Block scale** — proposed **1 block = 1 m**. Confirm, or choose finer (e.g. 0.5 m) for detail.
-- **One active session per code?** — proposed yes (anti-sharing). Confirm.
 - **Domain name** — do you want a friendly URL (~$10–15/yr), or is an IP/subdomain fine to start?
 
 ---

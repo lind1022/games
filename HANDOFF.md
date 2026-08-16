@@ -6,11 +6,23 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 it if they disagree.
 
 **As of 2026-08-16:** Phases 0-5 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
-`f3e4edc`, `c6449b0`). Phase 5 (admin panel, plus a Reissue action
-and a raised chat-log display cap added after initial review) was scripted-end-to-end-tested against
-throwaway server instances rather than the product owner's real dev server, and committed on the
-product owner's go-ahead to move on — it does **not** carry an explicit manual-browser-pass
-confirmation the way Phases 1-4 do (see §3). Phase 6 (deploy, durability, backups) is next — see §6.
+`f3e4edc`, `c6449b0`). Phase 5 (admin panel, plus a Reissue action and a raised chat-log display cap
+added after initial review) was scripted-end-to-end-tested against throwaway server instances rather
+than the product owner's real dev server, and committed on the product owner's go-ahead to move on —
+it does **not** carry an explicit manual-browser-pass confirmation the way Phases 1-4 do (see §3).
+
+Phase 6 (deploy, durability, backups) is **in progress and uncommitted**. Hosting is decided
+(**Railway**) and the dirty-chunk-flush optimization is being **deliberately skipped**, both per the
+product owner's explicit call. Everything achievable without a real Railway account is done and
+locally verified: boot-time writability assertion, `GET /health`, explicit `0.0.0.0` bind, a real
+`PRAGMA user_version` migration runner, a local `VACUUM INTO` backup mechanism with a rehearsed
+restore, and — the biggest find this phase — **a working production run path that didn't exist
+before** (the server's old `dist/index.js` start command pointed at a build that was never actually
+produced; production now runs `tsx` directly like dev does, and the server now serves the client's
+`vite build` output itself, realizing "one same-origin path works in dev and prod" from Phase 0's own
+stated intent, which had never been wired up). `railway.json` and a new durable **[DEPLOY.md](DEPLOY.md)**
+are written and ready. What's left is the actual deployment, which needs the product owner's Railway
+account directly — see §6.
 
 ---
 
@@ -253,6 +265,70 @@ codes, live online-players list, chat log review, and the four named moderation 
   "<password>"` prints an `ADMIN_PASSWORD_HASH` value to set as an env var. The plaintext password
   is never stored anywhere.
 
+### Phase 6 — deploy, durability, backups (**uncommitted**, in progress)
+Hosting: **Railway, confirmed** (product owner's call — see updated CLAUDE.md §9). Everything below
+is locally verified against throwaway server instances and throwaway data directories (never the real
+dev DB), since actually deploying needs the product owner's Railway account — see the new
+[DEPLOY.md](DEPLOY.md) for that part and §6 below.
+
+- **`server/src/index.ts`** — `assertDataDirWritable` runs at boot: writes and deletes a canary file
+  in `DATA_DIR`, and calls `process.exit(1)` with a loud error if that fails. PLAN.md's risk table
+  calls a silently-unmounted volume "the single most dangerous Railway+SQLite footgun" — refusing to
+  start with no world is far better than starting and quietly not persisting one. Verified against a
+  chmod'd-read-only directory: fails loudly, does not start. Added `GET /health` (checks real DB
+  connectivity via `db.healthCheck()`, not just that the HTTP server accepts sockets — feeds a host's
+  restart-on-failure policy). `httpServer.listen` now binds `0.0.0.0` explicitly rather than relying
+  on the default. A `setInterval` triggers `db.backup()` every 6h.
+- **Found and fixed a real gap while wiring this up: there was no working production run path at
+  all.** `tsc -b` is configured `emitDeclarationOnly: true` (types only, project-reference support for
+  `npm run typecheck` — never emitted real `.js`), so `server`'s old `"start": "node dist/index.js"`
+  pointed at a `dist/index.js` that was never actually produced by anything. Fixed by having
+  production run the server the same way dev does — directly off TypeScript source via `tsx` — rather
+  than standing up a second, separate build pipeline just for this; `tsx` moved from `devDependencies`
+  to `dependencies` since it's now needed at runtime. Separately, there was no mechanism for the
+  client to be reachable in production at all: Vite's dev server (which serves it locally) doesn't
+  run in prod. Added `serveClientStatic` in `index.ts`, which serves `client/dist` (the `vite build`
+  output) when present, falling back to `index.html` for any unmatched path (no client-side routing to
+  worry about) — and does nothing (returns false) when no build exists, which is the normal dev case,
+  so this doesn't change dev behavior at all. This realizes PLAN.md Phase 0's stated intent — "one
+  same-origin path works in dev and prod" — which had never actually been wired up for prod. Verified
+  the *entire* flow end-to-end against a throwaway build + throwaway server instance: `vite build` →
+  production-mode server serves the built client, `GET /health` responds, a real WebSocket join +
+  chat round-trip both work, all from one process on one port.
+- **`server/src/db.ts`** — replaced the ad hoc, unconditional `ensureColumn` call Phase 5 shipped
+  with a real migration runner on `PRAGMA user_version`: a `migrations` array of `{ version, apply }`
+  entries, applied in order past the DB's current `user_version`, which is then bumped so a migration
+  never reruns. Verified idempotent (opening the same DB twice doesn't reapply or error) and correct
+  against both a fresh DB and an older one missing a column. `backup(dir)` uses `VACUUM INTO` (never
+  a raw file copy, which under WAL can miss the `-wal` sidecar and produce an inconsistent snapshot)
+  to write a timestamped snapshot; verified it succeeds even with the live server holding the same DB
+  file open concurrently, and rehearsed a full restore — opened the backup file standalone, confirmed
+  the data matched and `healthCheck()` passed. `healthCheck()` is a trivial `SELECT 1`, feeding
+  `GET /health`.
+- **`railway.json`** (new) — Nixpacks build (`npm install && npm run build`), start command
+  (`npm start`), health check path/timeout, `restartPolicyType: ALWAYS`. Unverified against a real
+  Railway account — the schema is per Railway's public docs, not something this session could test.
+- **`package.json` / `client`** — added root `build` (delegates to `client`'s `vite build`) and
+  `start` (delegates to `server`'s `tsx`-based start) scripts, so Railway's default
+  `npm install && npm run build` / `npm start` flow works without needing custom commands configured
+  in the dashboard (though `railway.json` sets them explicitly anyway, as a config-as-code belt to
+  the dashboard's suspenders).
+- **`CLAUDE.md`** — filled in §8's commands (previously a placeholder since scaffolding), confirmed
+  the Railway hosting decision and the one-session-per-code decision in §9, per this file's own
+  instruction to fold decisions back in as they're made.
+- **`DEPLOY.md`** (new) — durable (not point-in-time, unlike this file) step-by-step: Railway account
+  setup, volume mount, required env vars (`DATA_DIR`, `JOIN_CODE_PEPPER`, `ADMIN_PASSWORD_HASH`,
+  `ALLOWED_ORIGIN`), a post-deploy verification checklist matching PLAN.md's actual Phase 6 "done
+  when" criteria (redeploy-preserves-data canary check, WSS through Railway's proxy, mid-session kill
+  losing nothing), and the current state of backups/known gaps.
+
+**Deliberately not done — needs the product owner directly, see §6 and DEPLOY.md:** the actual
+Railway deployment (account/project/volume/env vars all need the product owner's Railway access, not
+something this session can do); shipping backups off-box to R2/S3 (needs cloud storage credentials);
+the dirty-chunk-flush + crash-recovery-replay optimization (PLAN.md C6) — **the product owner
+confirmed skipping this**, matching the recommendation above (write-through is already durable, and
+this project's scale doesn't need the optimization it trades away simplicity for).
+
 ---
 
 ## 3. Browser verification
@@ -481,13 +557,32 @@ interactive behavior (§3 Phase 3), the join screen (§3 Phase 4), and the admin
 
 ---
 
-## 6. Next up: Phase 6 (per PLAN.md)
+## 6. Next up: the product owner runs DEPLOY.md against a real Railway account
 
-Phases 0-5 are committed and pushed. Phase 5's admin **page** itself (as opposed to the actions it
-drives, which are scripted-verified — §4) still hasn't had an explicit manual-browser confirmation;
-§3's checklist is there whenever that happens.
+Two decisions that were open are now resolved: **hosting is Railway** (product owner's call, folded
+back into CLAUDE.md §9 per its own instruction to do so as decisions are made), and **the
+dirty-chunk-flush optimization (PLAN.md C6) is being skipped deliberately** (product owner confirmed
+the recommendation: pure write-through already makes every change durable immediately, which already
+satisfies Phase 6's actual correctness "done when" criterion, and this project's ≤5-player scale is
+unlikely to need the write-amplification optimization that buffer would trade simplicity away for).
 
-Two things worth doing before real kids ever get a code, not blocking Phase 6 itself:
+What's left in Phase 6 genuinely needs the product owner directly, since none of it is achievable from
+this session — creating a Railway account, attaching a real volume, and setting real secrets all need
+their account access:
+
+1. **Follow [DEPLOY.md](DEPLOY.md)** for the actual Railway setup — account/project creation, volume
+   mount, the four required env vars (`DATA_DIR`, `JOIN_CODE_PEPPER`, `ADMIN_PASSWORD_HASH`,
+   `ALLOWED_ORIGIN`), and first deploy. `railway.json` is checked in and should make Railway's build/
+   start/health-check config close to automatic, but it's unverified against a real account — the
+   first deploy is also the first real test of it.
+2. **Run through DEPLOY.md §3's post-deploy checklist** — this is where PLAN.md's actual Phase 6 "done
+   when" criteria get checked for the first time, since they need a real public deployment to test at
+   all (redeploy-preserves-data canary, WSS through Railway's proxy, mid-session kill losing nothing).
+3. **Off-box backup storage** (R2/S3 or similar) is still not wired up — needs cloud storage
+   credentials. The local `VACUUM INTO` mechanism is done and rehearsed (§2), but see DEPLOY.md §4 for
+   why that alone isn't real disaster recovery yet.
+
+Two things worth doing before real kids ever get a code, independent of the above:
 - **Seed `chatFilter.ts`'s `WHITELIST`** with real children's names and school-specific vocabulary
   once real codes exist — it's still empty; PLAN.md flags this as a critical pre-launch step.
 - **Set real, distinct secrets** (`JOIN_CODE_PEPPER`, `ADMIN_PASSWORD_HASH`) before any deployment a
@@ -495,15 +590,6 @@ Two things worth doing before real kids ever get a code, not blocking Phase 6 it
   hardcoded insecure pepper if unset, and the admin panel is simply unreachable without the password
   hash set (safe-by-default, but worth confirming deliberately rather than discovering it locked out).
 
-Phase 6 is deploy, durability, and backups — the last phase before this can safely go live for real:
-Railway project + a volume mounted at `DATA_DIR` (never a hardcoded path); a **boot-time assertion**
-that `DATA_DIR` is writable and actually on the mounted volume — PLAN.md calls this out as "the single
-most dangerous Railway+SQLite footgun" (silent total world loss on every redeploy if the volume isn't
-really attached); `GET /health`; restart policy `ALWAYS`; bind `0.0.0.0:$PORT`; a `PRAGMA user_version`
-migration runner (note: `db.ts`'s current `ensureColumn`-style ad hoc migration, added this session for
-`join_codes.muted`, is exactly the kind of thing a real migration runner should absorb once one
-exists); the dirty-chunk flush + flush-on-SIGTERM + crash-recovery replay optimization deferred since
-Phase 1 (C6) — Phase 1-5 have all used pure write-through, which is correct but not what ships to
-production; backups via `VACUUM INTO` **only** (never a raw file copy, which misses the WAL sidecar
-under concurrent writes) shipped off-box on a schedule; a rehearsed restore. Production deploy should
-wait until this phase is done so it isn't an open door before it's durable. Full spec: PLAN.md → Phase 6.
+Also still open from Phase 5: the admin **page** itself (as opposed to the actions it drives, which
+are scripted-verified) hasn't had an explicit manual-browser confirmation — §3's checklist is there
+whenever that happens.
