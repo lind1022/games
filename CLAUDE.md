@@ -43,7 +43,7 @@ hunger, or day/night survival mechanics.
 - **Voxel world** — everything in the game is a block; players build and destroy blocks like Minecraft.
 - **Web-based** — runs in a browser, no install.
 - **Server-hosted** — a Node server hosts the game; reachable over the internet when cloud-deployed
-  (DEPLOY.md), or over the local network / a tunnel while self-hosted (SELF_HOSTING.md, current mode).
+  (DEPLOY.md), or via a public tunnel while self-hosted (SELF_HOSTING.md, current mode).
 - **Multiplayer + chat** — up to **5 children** play in the same world simultaneously and can chat.
 - **Join-code identity** — the admin generates unique join codes and shares them.
   - Each join code maps to **one specific display name** (e.g. code `ABCDEFG` → the name "Jack").
@@ -81,9 +81,10 @@ block change and chat message. Clients never write directly to storage.
 
 ### Hosting decision (confirmed 2026-08-16 — see §9)
 **Self-hosting, for now.** The admin runs the server on their own machine (`npm run build && npm
-start`); kids connect over the same WiFi (or a tunnel — see SELF_HOSTING.md). No cloud account, no
-monthly cost, no public internet exposure by default. The trade-off is §1's admin-independence
-principle: the game is only reachable while the admin is actively hosting.
+start`) and exposes it via a public tunnel (Cloudflare Tunnel — see SELF_HOSTING.md, rehearsed
+end-to-end against a real tunnel); kids connect from anywhere via that URL, not just the admin's own
+network. No cloud account, no monthly cost. The trade-off is §1's admin-independence principle: the
+game is only reachable while the admin is actively hosting (and running the tunnel).
 
 **Railway remains the pick for when always-on hosting is wanted again** (~$5/mo, git-push deploys,
 automatic HTTPS/WebSockets, a small attached volume for the `.db` file — fits inside the $5 usage

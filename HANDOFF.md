@@ -341,19 +341,39 @@ After Phase 6 shipped, the product owner asked how much work it'd be to self-hos
 to Railway — "joinable only when the owner is playing" — with the explicit intent to switch to Railway
 later once the game is more mature. Answer, confirmed by how little changed: almost none, because the
 Phase 6 production path (single process, single port, server serves the built client itself) already
-*is* the right shape for self-hosting — the only gap was that `ALLOWED_ORIGIN` only accepted one value,
-which would reject either the owner's own `localhost` testing or a LAN device, not both at once.
+*is* the right shape for self-hosting — the only gap was that `ALLOWED_ORIGIN` only accepted one value.
+
+**Revised after the first pass**: the initial version of this documented same-WiFi (LAN) hosting as
+the default, with a public tunnel as an optional "beyond your own WiFi" extra. The product owner asked
+for the opposite — LAN removed entirely, tunnel-based public-URL exposure as *the* documented path —
+since that's what's actually wanted (kids joining aren't necessarily on the same network).
+`SELF_HOSTING.md` was rewritten around Cloudflare Tunnel (`cloudflared`) as the primary flow.
+
+This was **rehearsed for real**, not just documented from knowledge: downloaded the actual
+`cloudflared` binary, ran a real quick tunnel against a throwaway local server instance, and confirmed
+over the genuine public `https://*.trycloudflare.com` URL — not a simulated one — that a WSS
+connection opens, `join` succeeds, and a chat message round-trips, all through the tunnel. This also
+caught a real mistake worth flagging: the first attempt to create a test join code for this rehearsal
+omitted `DATA_DIR`, so `createCode.ts` fell back to its default path and wrote a `TunnelTestKid` row
+into the **product owner's actual dev database** instead of the throwaway one. Caught immediately by
+checking the database directly, deleted the one stray row precisely by its `code_hash` (confirmed the
+three pre-existing real codes — `TestKid1`, `TestKid2`, and `Eddie`, the last of which the product
+owner created themselves at some point outside this session — were untouched before and after), then
+re-ran the rehearsal correctly against the throwaway `DATA_DIR`. Noting this here in the interest of
+the same transparency this file has applied to test mistakes throughout the session (e.g. the Phase 2
+"unrealistic teleport test" and Phase 3 "rate-limit test didn't account for prior consumption" notes).
 
 - **`server/src/index.ts`** — `ALLOWED_ORIGIN` now accepts a comma-separated list. Verified with a
   real (non-`ws`-library, actual `Origin`-header-setting) WebSocket client against all three cases:
-  a `localhost` origin in the list connects, a LAN-shaped origin (`http://192.168.1.42:8793`) in the
-  list connects, and an origin not in the list is rejected with 403 — proving the allowlist logic
-  (already correct from Phase 4) generalizes to multiple values correctly, not just that it compiles.
-- **`SELF_HOSTING.md`** (new) — the current primary how-to: use `npm run build && npm start` (not
-  `npm run dev`, which splits across two ports and isn't LAN-friendly), find your LAN IP, set
-  `ALLOWED_ORIGIN` to match, still set real `JOIN_CODE_PEPPER`/`ADMIN_PASSWORD_HASH` (self-hosting
-  doesn't relax those), and options for reaching kids beyond your own WiFi if needed (tunnel, or —
-  explicitly not recommended — router port forwarding).
+  a `localhost` origin in the list connects, a second (non-localhost) origin in the list connects, and
+  an origin not in the list is rejected with 403 — proving the allowlist logic (already correct from
+  Phase 4) generalizes to multiple values correctly, not just that it compiles.
+- **`SELF_HOSTING.md`** (rewritten) — the current primary how-to, tunnel-only: install `cloudflared`;
+  start the tunnel first (`cloudflared tunnel --url http://localhost:8787`) to get the public URL,
+  *then* start the server with `ALLOWED_ORIGIN` set to that URL (order matters — env vars are fixed
+  at process launch); still set real `JOIN_CODE_PEPPER`/`ADMIN_PASSWORD_HASH` (self-hosting doesn't
+  relax those); a note on getting a stable URL (a named tunnel + a domain) instead of a fresh random
+  one every session.
 - **`DEPLOY.md`** — status line updated to "paused," pointing at SELF_HOSTING.md, explicit that
   nothing in it needs to change and nothing about self-hosting needs undoing to pick it back up later.
 - **`CLAUDE.md`** — this is the second time hosting has changed since the file's original "final pick
@@ -599,12 +619,12 @@ deliberately too (pure write-through already makes every change durable immediat
 Phase 6's actual correctness "done when" criterion, and this project's ≤5-player scale is unlikely to
 need the write-amplification optimization that buffer would trade simplicity away for).
 
-The immediate next step doesn't need an account or any external setup — just follow
-[SELF_HOSTING.md](SELF_HOSTING.md) §2's quick start on the machine that'll host: `npm run build`, set
-the three env vars (a real `JOIN_CODE_PEPPER`, an `ADMIN_PASSWORD_HASH`, and `ALLOWED_ORIGIN` matching
-your LAN IP), `npm start`, then try joining from a second device on the same WiFi to confirm it
-actually works end-to-end on real hardware (this session verified the mechanics — origin allowlisting,
-single-port serving — but not an actual second physical device on a real LAN).
+The tunnel-based flow itself (§2 above) was already rehearsed end-to-end for real this session — a
+genuine `cloudflared` quick tunnel, a real public `trycloudflare.com` URL, WSS connect + join + chat
+all confirmed working through it, not simulated. What's left is trying it with **real people**: follow
+[SELF_HOSTING.md](SELF_HOSTING.md) §3 on the machine that'll host, and have an actual second person
+join from their own device over the internet (not this session's own scripted client) — the mechanics
+are proven, but nobody's played through a real tunnel session yet.
 
 Whenever always-on hosting is wanted again: [DEPLOY.md](DEPLOY.md) is complete and ready, and its own
 §6-equivalent (its post-deploy checklist) is where PLAN.md's Railway-specific "done when" criteria
