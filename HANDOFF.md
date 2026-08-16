@@ -5,10 +5,10 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-16:** Phase 0 and Phase 1 are committed and pushed (`447d25e`, `66b689f`). Phase 2
-(multiplayer sync) is implemented, passed its scripted end-to-end test, and the product owner has
-confirmed it in a real two-tab browser pass — remote players, interpolation, and reach-distance all
-look good. Committing is the immediate next step, then on to Phase 3 (chat).
+**As of 2026-08-16:** Phase 0, 1, and 2 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`).
+Phase 3 (chat, with its safety layer) is implemented, scripted-end-to-end-tested, and confirmed in a
+real two-tab browser pass by the product owner — with one small UX gap the pass surfaced (server
+rejections were console-only, invisible in the UI) fixed on the spot. Committing is next. See §6.
 
 ---
 
@@ -38,7 +38,7 @@ contracts from PLAN.md §1 — block-type table (`blocks.ts`), chunk/coordinate 
 RLE chunk codec (`rle.ts`), zod-validated WS protocol schemas (`protocol.ts`). `school map.png` was
 untracked from git per decision D3 (still present in earlier history — see §5).
 
-### Phase 1 — vertical slice (**uncommitted**, in the working tree now)
+### Phase 1 — vertical slice (committed, pushed: `66b689f`)
 Real server authority + persistence loop on a flat 5×5-chunk test world:
 
 - **`server/src/`** — `db.ts` (SQLite via better-sqlite3: WAL pragmas, chunk load/save, `block_changes`
@@ -98,6 +98,56 @@ Broadcast join/leave/move, remote players rendered, and the reach-distance check
   `onPlayerState` handlers; `main.ts` sends `player-move` at ~12 Hz (within PLAN's 10–15 Hz target)
   once the initial `world-state` has been received, and calls `remotePlayers.tick()` every frame.
 
+### Phase 3 — chat, with its safety layer (**uncommitted**, in the working tree now)
+Free-text chat meeting CLAUDE.md §7 — masking, rate limiting, PII-heuristic flagging, and full
+logging, built in from the start rather than bolted on:
+
+- **`server/src/chatFilter.ts`** (new) — pure function `filterChatMessage(rawText)`. Uses
+  **`obscenity`** (`RegExpMatcher` + `englishDataset` + `englishRecommendedTransformers`) as the core
+  matcher, masking with `asteriskCensorStrategy()`. One deliberate deviation from the library's own
+  recommended preset: **`skipNonAlphabeticTransformer()` is added back in**, even though upstream
+  disables it by default (their issues #23/#46 — it can over-match across word boundaries). Verified
+  empirically before adopting: without it, spaced-out evasion (`"f u c k"`, `"f.u.c.k"`) sailed
+  straight through unmasked, which is exactly the evasion PLAN.md named as a reason to pick this
+  library over a simpler substring one; with it enabled, that evasion is caught and a battery of
+  cross-word-boundary phrases (`"class assignment"`, `"the assassin game"`, `"grass stains"`, `"glass
+  door"`, …) still came back clean — this is a mask-don't-block system, so the cost of an occasional
+  false positive (a few extra asterisks) is low, while the cost of a false negative (a slur reaching
+  a child) is exactly the harm this whole layer exists to prevent. Text is NFKC-normalized and
+  control-chars stripped before matching (catches unicode-lookalike evasion like fullwidth `ｆｕｃｋ`
+  too) — and it's the *normalized* text that gets broadcast for clean messages too, so nobody sees
+  ambient unicode weirdness. A separate, independent set of PII-ish regex heuristics (7+ digit runs,
+  "meet me", "your real name", address-ish words) only sets a log flag/reason — they never alter the
+  broadcast text, since PLAN.md is explicit these false-positive too easily (e.g. "meet me at spawn")
+  to justify blocking. `WHITELIST` is empty for now (no real names exist yet, Phases 1-3 dev-stub
+  identity) — PLAN.md flags seeding it with every child's display name and school vocabulary as a
+  **critical pre-launch step** before Phase 4 ships real names; the Scunthorpe problem bites hardest
+  on exactly names and places.
+- **`server/src/db.ts`** — added `chat_log` (raw `message` always preserved, `filtered_message` is
+  what was actually broadcast, `flagged`/`flag_reason` for admin review later). Like `block_changes`,
+  deliberately omits the `code_hash` FK to `join_codes` — that table doesn't exist until Phase 4.
+- **`server/src/rateLimit.ts`** — `TokenBucket` is now constructor-configurable (capacity, refill
+  rate) instead of hardcoded, so chat (burst 5, refill 1 per 2s) and block placement (burst 20, refill
+  15/s) can have genuinely different budgets from the same class.
+- **`server/src/index.ts`** — handles `chat-message`: mute check → rate limit → trim/empty check →
+  filter → log to `chat_log` → broadcast to **everyone including the sender** (so they see the same,
+  possibly-masked text everyone else does). **No auto-mute on a single flagged message** — only a
+  burst of 5+ flags within a 10-minute rolling window earns a 60s cooldown, and even then it's a mute
+  (chat rejected with a friendly error), never a kick or a ban. A single flag is very often a false
+  positive; repeated flags are a much stronger signal.
+- **`client/index.html`** — added `#chat-log` (scrolling message list, bottom-left, `pointer-events:
+  none` so it never blocks clicks) and `#chat-input` (hidden until chat is open).
+- **`client/src/controls.ts`** — added `setInputEnabled(enabled)`. While chat is open, movement key
+  events are ignored entirely (and any currently-held keys are cleared) so typing "wasd" into a chat
+  message doesn't also walk the player around.
+- **`client/src/main.ts`** — **Enter** opens chat (releases pointer lock, shows/focuses the input,
+  disables movement input); **Enter** again sends (if non-empty) and closes; **Escape** cancels
+  without sending. Closing either way re-enables movement and re-requests pointer lock. Incoming
+  `chat-message` broadcasts append to `#chat-log`, capped at the last 50 lines. Server `error`
+  messages (rate limit, chat mute, reach/bounds rejections, …) now also render as a system line in
+  the chat log (styled distinctly via `.system`), not just `console.error` — added after the product
+  owner's browser pass, see §3.
+
 ---
 
 ## 3. Browser verification
@@ -130,6 +180,23 @@ checklist this file suggested (remote-player capsule + name label rendering, int
 turning, block break/place syncing across tabs, reach-distance feel, prompt avatar removal on
 disconnect, no hitching from the Web Worker meshing). Verdict: confirmed working, no bugs reported
 this round.
+
+### Phase 3 — done
+No browser automation tool was available in this session either, so as with Phases 1-2 the first pass
+was automated-only (§4). The product owner then tested it directly in two tabs — chat opening/typing/
+sending/canceling, masking, movement not leaking through while typing — and confirmed it all works.
+
+One real finding, not a bug but a UX gap: rapid-fire messaging through the UI never visibly triggered
+the rate limiter. This *is* expected — burst 5 / refill 1-per-2s (PLAN.md's exact numbers) is tuned to
+stop a scripted spam client, not a human who has to re-press Enter and type for every message, and the
+server-side limiter was already proven correct at exactly those numbers by the Phase 3 scripted test
+(§4: a fresh connection's burst of 10 delivered exactly 5). But it surfaced a real gap: when the
+limiter (or the flag-escalation mute) *did* reject something, nothing appeared in the chat UI —
+only `console.error`. That's the silent-failure default CLAUDE.md §7 explicitly calls out as wrong
+for this audience. Fixed: server `error` messages now also render as a `⚠`-prefixed system line in
+the chat log (`main.ts`'s `appendSystemMessage`, styled via `.system` in `index.html`) — covers rate
+limit, chat mute, and the existing reach/bounds rejections for block placement too, all from the one
+already-generic `error` message type.
 
 ---
 
@@ -175,7 +242,31 @@ None of this used a real GPU/display — that gap was closed by §3's Phase 1 ma
   (`?worker_file&type=module`), and that `mesh.worker.ts` and `remotePlayers.ts` resolve cleanly.
 - `tsc -b` clean across all packages, including `mesh.worker.ts`'s cast-based typing approach.
 
-**Still not covered by anything automated:** actual rendering correctness (§3 Phase 2).
+**Phase 3 additions:**
+- `chatFilter.ts` exercised standalone (not checked in) against a battery of inputs before it was
+  ever wired into the server: clean messages pass through unflagged; profanity gets masked and
+  flagged; spaced-out (`"f u c k"`), punctuated (`"f.u.c.k"`), and fullwidth-unicode (`"ｆｕｃｋ"`)
+  evasion are all caught (this is what led to adding `skipNonAlphabeticTransformer()` — the first
+  pass without it let spaced-out evasion straight through); a battery of legitimate phrases sharing
+  substrings with blacklisted words across word boundaries stayed clean; all four PII heuristics
+  (digit run, "meet me", "your real name", address-ish) fire correctly and independently of the
+  profanity check.
+- Full chat flow scripted end-to-end via `ws` (not checked in): a clean message broadcasts to
+  **everyone including the sender**; a profane message arrives masked at every client; a
+  whitespace-only message is silently dropped (and correctly still consumes a rate-limit token,
+  which the test initially got wrong before isolating it on a fresh connection — same "test was
+  unrealistic, not the server" pattern as Phase 2's teleport check); a burst of 10 messages on a
+  **fresh** connection delivers exactly 5 (the configured burst capacity) before the rate limiter
+  kicks in with a "slow down" error; 5 flagged messages in a row correctly trigger a mute, and the
+  6th message is rejected with a "muted" error rather than delivered.
+- Queried `data/world.db` directly after the above: `chat_log` rows have the **raw, unmasked**
+  `message` preserved alongside the `filtered_message` that was actually broadcast, correct
+  `flagged`/`flag_reason`, and the muted 6th message (never delivered) correctly does **not** appear
+  as a row — only messages that were actually sent get logged.
+- `tsc -b` clean across all packages.
+
+**Still not covered by anything automated:** actual rendering correctness (§3 Phase 2), and the chat
+UI's interactive behavior (§3 Phase 3).
 
 ---
 
@@ -193,18 +284,15 @@ None of this used a real GPU/display — that gap was closed by §3's Phase 1 ma
 
 ---
 
-## 6. Next up: Phase 3 (per PLAN.md)
+## 6. Next up: Phase 4 (per PLAN.md)
 
-Phase 1 (`66b689f`) and Phase 2 are both confirmed in a real browser. Phase 3 is chat, **with its
-safety layer built in from the start, not bolted on after** — PLAN.md is explicit this is
-non-negotiable per CLAUDE.md §7, not ordinary feature polish. Headline tasks: `chat-message` type
-(already in the Phase 0 protocol schema, unused until now); `obscenity` (TypeScript-native,
-transformer-based — chosen over simpler substring libraries specifically because it survives
-leetspeak/unicode-lookalike/spacing evasion) as the core matcher; NFKC normalization + control-char
-stripping before matching; **mask, don't hard-block** (replace the flagged word, log the raw text
-always); token-bucket rate limit (burst 5, refill 1/2s), 200-char cap; PII-ish heuristics (digit
-runs, "meet me", "what's your real name") as a high-severity **log tag**, not an auto-block — they
-false-positive on things like "meet me at spawn"; no auto-mute on first offense. Critical pre-launch
-step once real names exist: whitelist every child's display name and school-specific vocabulary
-before the filter goes live — the Scunthorpe problem bites hardest on names and places. Full spec:
-PLAN.md → Phase 3.
+Phases 0-3 are all confirmed in a real browser (Phase 3 as of this update — commit pending, see the
+top of this file). Phase 4 replaces the dev-stub join with real identity: 6-char codes from a
+Crockford-style alphabet excluding ambiguous glyphs and vowels; codes hashed (HMAC-SHA256 + pepper),
+never stored in plaintext; a session token in `localStorage`; session takeover semantics (C5 — a new
+join from the same code revokes the old session with a friendly message, never a hard lockout,
+because school wifi drops constantly and an offline admin can't rescue a stranded child); rate-limited
+code entry. This is also the point real display names start existing, which makes
+`chatFilter.ts`'s `WHITELIST` (currently empty) **no longer optional to seed** — every child's name
+and school-specific vocabulary needs to go in there and get smoke-tested through the filter before
+real kids are chatting, per PLAN.md's explicit pre-launch callout. Full spec: PLAN.md → Phase 4.

@@ -15,6 +15,7 @@ import {
   type ChunkData,
   type ServerMessage,
 } from '@game/shared';
+import { filterChatMessage } from './chatFilter.js';
 import { GameDb } from './db.js';
 import { TokenBucket } from './rateLimit.js';
 import { World, WORLD_CHUNKS, WORLD_SIZE } from './world.js';
@@ -42,6 +43,16 @@ const SPEED_TOLERANCE = 1; // flat allowance on top, for clock/frame variance
 const POSITION_BOUNDS_MARGIN = 4; // blocks of slack around the world box
 const REACH_TOLERANCE = 2; // blocks — position is only as fresh as the last player-move tick
 
+// Chat safety (PLAN.md Phase 3 / CLAUDE.md §7). No auto-mute on a first
+// offense — only after repeated flags in a short window, and even then it's
+// a short cooldown, never a kick. A single flagged message is very often a
+// false positive (see chatFilter.ts); repeated flags are a stronger signal.
+const CHAT_RATE_CAPACITY = 5;
+const CHAT_RATE_REFILL_PER_SECOND = 0.5; // 1 message per 2s sustained
+const CHAT_FLAG_WINDOW_MS = 10 * 60 * 1000;
+const CHAT_FLAG_THRESHOLD = 5;
+const CHAT_MUTE_DURATION_MS = 60 * 1000;
+
 interface Connection {
   id: string;
   displayName: string;
@@ -52,6 +63,9 @@ interface Connection {
   yaw: number;
   pitch: number;
   lastMoveAt: number;
+  chatLimiter: TokenBucket;
+  recentFlagTimestamps: number[];
+  chatMutedUntil: number;
 }
 
 const connections = new Map<WebSocket, Connection>();
@@ -161,6 +175,9 @@ wss.on('connection', (socket) => {
         yaw: 0,
         pitch: 0,
         lastMoveAt: Date.now(),
+        chatLimiter: new TokenBucket(CHAT_RATE_CAPACITY, CHAT_RATE_REFILL_PER_SECOND),
+        recentFlagTimestamps: [],
+        chatMutedUntil: 0,
       };
 
       // Snapshot before registering the new connection, so it doesn't get
@@ -271,6 +288,52 @@ wss.on('connection', (socket) => {
       conn.lastMoveAt = now;
 
       broadcastExcept(socket, playerStateMessage(conn));
+      return;
+    }
+
+    if (message.type === 'chat-message') {
+      const now = Date.now();
+
+      if (now < conn.chatMutedUntil) {
+        send(socket, { type: 'error', message: 'muted for a moment — try again shortly' });
+        return;
+      }
+
+      if (!conn.chatLimiter.tryConsume()) {
+        send(socket, { type: 'error', message: 'slow down — too many messages' });
+        return;
+      }
+
+      const trimmed = message.text.trim();
+      if (trimmed.length === 0) return;
+
+      const { filteredMessage, flagged, flagReason } = filterChatMessage(trimmed);
+
+      db.insertChatMessage({
+        displayName: conn.displayName,
+        message: trimmed,
+        filteredMessage,
+        flagged,
+        flagReason,
+      });
+
+      // No auto-mute on a single flag — it's very often a false positive
+      // (see chatFilter.ts). Only a burst of flags in a short window earns
+      // a short cooldown, and even then it's a mute, never a kick.
+      if (flagged) {
+        conn.recentFlagTimestamps.push(now);
+        conn.recentFlagTimestamps = conn.recentFlagTimestamps.filter(
+          (t) => now - t < CHAT_FLAG_WINDOW_MS
+        );
+        if (conn.recentFlagTimestamps.length >= CHAT_FLAG_THRESHOLD) {
+          conn.chatMutedUntil = now + CHAT_MUTE_DURATION_MS;
+          conn.recentFlagTimestamps = [];
+        }
+      }
+
+      // Broadcast to everyone, including the sender, so they see the same
+      // (possibly masked) text everyone else does.
+      broadcast({ type: 'chat-message', from: conn.displayName, text: filteredMessage });
     }
   });
 

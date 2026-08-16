@@ -11,6 +11,7 @@ type BlockUpdateMsg = Extract<ServerMessage, { type: 'block-update' }>;
 type PlayerJoinMsg = Extract<ServerMessage, { type: 'player-join' }>;
 type PlayerLeaveMsg = Extract<ServerMessage, { type: 'player-leave' }>;
 type PlayerStateMsg = Extract<ServerMessage, { type: 'player-state' }>;
+type ChatMessageMsg = Extract<ServerMessage, { type: 'chat-message' }>;
 type ErrorMsg = Extract<ServerMessage, { type: 'error' }>;
 
 export interface NetHandlers {
@@ -21,6 +22,7 @@ export interface NetHandlers {
   onPlayerJoin: (msg: PlayerJoinMsg) => void;
   onPlayerLeave: (msg: PlayerLeaveMsg) => void;
   onPlayerState: (msg: PlayerStateMsg) => void;
+  onChatMessage: (msg: ChatMessageMsg) => void;
   onError: (msg: ErrorMsg) => void;
 }
 
@@ -79,11 +81,11 @@ export class Net {
       case 'player-state':
         this.handlers.onPlayerState(msg);
         break;
+      case 'chat-message':
+        this.handlers.onChatMessage(msg);
+        break;
       case 'error':
         this.handlers.onError(msg);
-        break;
-      default:
-        // chat-message is Phase 3+ — the Phase 2 server never sends it.
         break;
     }
   }

@@ -10,6 +10,7 @@
   "dependencies": {
     "@game/shared": "*",
     "better-sqlite3": "^11.7.0",
+    "obscenity": "^0.4.6",
     "ws": "^8.18.0"
   },
   "devDependencies": {

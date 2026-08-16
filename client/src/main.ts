@@ -11,6 +11,40 @@ const statusEl = document.getElementById('app');
 if (!statusEl) throw new Error('missing #app element');
 statusEl.textContent = `Connecting… (protocol v${PROTOCOL_VERSION})`;
 
+const chatLogElMaybe = document.getElementById('chat-log');
+const chatInputElMaybe = document.getElementById('chat-input') as HTMLInputElement | null;
+if (!chatLogElMaybe || !chatInputElMaybe) throw new Error('missing chat UI elements');
+const chatLogEl: HTMLElement = chatLogElMaybe;
+const chatInputEl: HTMLInputElement = chatInputElMaybe;
+
+const MAX_CHAT_LINES = 50;
+function appendChatLine(line: HTMLElement): void {
+  chatLogEl.appendChild(line);
+  while (chatLogEl.childElementCount > MAX_CHAT_LINES) {
+    chatLogEl.removeChild(chatLogEl.firstChild!);
+  }
+}
+
+function appendChatMessage(from: string, text: string): void {
+  const line = document.createElement('div');
+  const fromSpan = document.createElement('span');
+  fromSpan.className = 'from';
+  fromSpan.textContent = `${from}: `;
+  line.appendChild(fromSpan);
+  line.appendChild(document.createTextNode(text));
+  appendChatLine(line);
+}
+
+// Surfaces server rejections (rate limit, chat mute, reach/bounds checks,
+// etc.) in the chat log instead of only the devtools console — CLAUDE.md
+// §7 flags silent failure as the wrong default for a children's product.
+function appendSystemMessage(text: string): void {
+  const line = document.createElement('div');
+  line.className = 'system';
+  line.textContent = `⚠ ${text}`;
+  appendChatLine(line);
+}
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x87ceeb);
 
@@ -61,6 +95,7 @@ const net = new Net(displayName, {
   },
   onError: (msg) => {
     console.error('[server error]', msg.message);
+    appendSystemMessage(msg.message);
   },
   onWorldState: (msg) => {
     for (const chunk of msg.chunks) {
@@ -94,6 +129,52 @@ const net = new Net(displayName, {
       remotePlayers.updateState(msg.id, msg.position.x, msg.position.y, msg.position.z, msg.yaw);
     }
   },
+  onChatMessage: (msg) => {
+    appendChatMessage(msg.from, msg.text);
+  },
+});
+
+// Minimal chat UI (CLAUDE.md §3: plain DOM overlay, not React). Enter opens
+// the input and releases pointer lock; Enter again sends and re-locks;
+// Escape cancels without sending. Movement input is disabled while typing
+// so "wasd" in a message doesn't also walk the player (see
+// PlayerController.setInputEnabled).
+let chatOpen = false;
+
+function openChat(): void {
+  if (chatOpen) return;
+  chatOpen = true;
+  document.exitPointerLock();
+  controller.setInputEnabled(false);
+  chatInputEl.classList.add('visible');
+  chatInputEl.value = '';
+  chatInputEl.focus();
+}
+
+function closeChat(): void {
+  chatOpen = false;
+  chatInputEl.classList.remove('visible');
+  chatInputEl.blur();
+  controller.setInputEnabled(true);
+  renderer.domElement.requestPointerLock();
+}
+
+window.addEventListener('keydown', (event) => {
+  if (!chatOpen && event.code === 'Enter' && joined) {
+    event.preventDefault();
+    openChat();
+  }
+});
+
+chatInputEl.addEventListener('keydown', (event) => {
+  event.stopPropagation();
+  if (event.code === 'Enter') {
+    const text = chatInputEl.value.trim();
+    if (text.length > 0) net.send({ type: 'chat-message', text });
+    closeChat();
+  } else if (event.code === 'Escape') {
+    closeChat();
+  }
 });
 
 renderer.domElement.addEventListener('mousedown', (event) => {

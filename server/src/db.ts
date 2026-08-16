@@ -65,6 +65,20 @@ export class GameDb {
       );
       CREATE INDEX IF NOT EXISTS idx_bc_ts ON block_changes(ts);
       CREATE INDEX IF NOT EXISTS idx_bc_chunk_ts ON block_changes(chunk_x, chunk_z, ts);
+
+      -- Like block_changes, deliberately omits the code_hash FK to
+      -- join_codes from PLAN.md §6's full schema — join codes don't exist
+      -- until Phase 4. display_name is the only identity available now.
+      CREATE TABLE IF NOT EXISTS chat_log (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts               INTEGER NOT NULL,
+        display_name     TEXT NOT NULL,
+        message          TEXT NOT NULL,
+        filtered_message TEXT NOT NULL,
+        flagged          INTEGER NOT NULL DEFAULT 0 CHECK (flagged IN (0,1)),
+        flag_reason      TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_ts ON chat_log(ts);
     `);
   }
 
@@ -117,6 +131,29 @@ export class GameDb {
       this.recordBlockChange(params);
     });
     tx();
+  }
+
+  /** Always logs the raw (pre-filter) text — never only the masked/broadcast form. */
+  insertChatMessage(params: {
+    displayName: string;
+    message: string;
+    filteredMessage: string;
+    flagged: boolean;
+    flagReason: string | null;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO chat_log (ts, display_name, message, filtered_message, flagged, flag_reason)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        Date.now(),
+        params.displayName,
+        params.message,
+        params.filteredMessage,
+        params.flagged ? 1 : 0,
+        params.flagReason
+      );
   }
 
   close(): void {

@@ -25,6 +25,8 @@ export class PlayerController {
   private yaw = 0;
   private pitch = 0;
   private readonly keys = new Set<string>();
+  /** Disabled while the chat input has focus, so typing "wasd" doesn't also walk the player. */
+  private inputEnabled = true;
 
   constructor(
     private readonly domElement: HTMLElement,
@@ -37,8 +39,17 @@ export class PlayerController {
       }
     });
     document.addEventListener('mousemove', (e) => this.onMouseMove(e));
-    window.addEventListener('keydown', (e) => this.keys.add(e.code));
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('keydown', (e) => {
+      if (this.inputEnabled) this.keys.add(e.code);
+    });
+    window.addEventListener('keyup', (e) => {
+      if (this.inputEnabled) this.keys.delete(e.code);
+    });
+  }
+
+  setInputEnabled(enabled: boolean): void {
+    this.inputEnabled = enabled;
+    if (!enabled) this.keys.clear();
   }
 
   setSpawn(x: number, y: number, z: number): void {

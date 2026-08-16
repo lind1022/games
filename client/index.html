@@ -36,11 +36,60 @@
         z-index: 10;
         pointer-events: none;
       }
+      #chat-log {
+        position: fixed;
+        left: 8px;
+        bottom: 44px;
+        width: min(420px, 60vw);
+        max-height: 30vh;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        gap: 2px;
+        font-family: monospace;
+        font-size: 13px;
+        color: white;
+        text-shadow: 0 0 4px black;
+        z-index: 10;
+        pointer-events: none;
+      }
+      #chat-log div {
+        word-break: break-word;
+      }
+      #chat-log .from {
+        font-weight: bold;
+      }
+      #chat-log .system {
+        color: #ffd479;
+        font-style: italic;
+      }
+      #chat-input {
+        position: fixed;
+        left: 8px;
+        bottom: 8px;
+        width: min(420px, 60vw);
+        font-family: monospace;
+        font-size: 14px;
+        padding: 6px 8px;
+        box-sizing: border-box;
+        background: rgba(0, 0, 0, 0.6);
+        color: white;
+        border: 1px solid rgba(255, 255, 255, 0.4);
+        border-radius: 4px;
+        z-index: 11;
+        display: none;
+      }
+      #chat-input.visible {
+        display: block;
+      }
     </style>
   </head>
   <body>
     <div id="app">Connecting&hellip;</div>
     <div id="crosshair"></div>
+    <div id="chat-log"></div>
+    <input id="chat-input" type="text" maxlength="200" placeholder="Message… (Enter to send, Esc to cancel)" />
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
