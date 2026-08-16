@@ -6,8 +6,8 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 it if they disagree.
 
 **As of 2026-08-16:** Phases 0-4 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
-and Phase 4's commit — see git log). Phase 4's join screen was confirmed working in a real browser
-pass by the product owner. Phase 5 (admin panel) is next — see §6.
+`f3e4edc`). Phase 4's join screen was confirmed working in a real browser pass by the product owner.
+Phase 5 (admin panel) is next — see §6.
 
 ---
 
