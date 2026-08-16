@@ -2,9 +2,10 @@
 
 Guidance for Claude Code (and humans) working in this repository.
 
-> **Status:** Greenfield / pre-code. All major product decisions are now **confirmed** (see §2 and
-> §9). This file is the agreed **specification and architecture**; the next task is scaffolding.
-> A few small items remain marked _(confirm)_. Decisions confirmed on 2026-08-14.
+> **Status:** Phases 0-6 built (scaffolding through deploy-readiness — see PLAN.md and HANDOFF.md for
+> current detail). **Currently self-hosted** (SELF_HOSTING.md) rather than always-on cloud-hosted, a
+> deliberate temporary choice made 2026-08-16 — see §1 and §3. All major product decisions are
+> confirmed (see §2 and §9).
 
 ---
 
@@ -14,17 +15,24 @@ A web-based, Minecraft-style voxel game that **primary-school-aged children** ca
 online in a shared, persistent world modelled on **their real school**. Kids can move around,
 build with blocks, and chat with each other. Everything in the world is a block.
 
-The game is **online-hosted and always available**: children can join and play at any time,
-**without the admin needing to be online**. Every change made to the world is saved permanently.
-It is **pure creative / build-only** — no health, mobs, hunger, or day/night survival mechanics.
+The long-term vision is **online-hosted and always available**: children can join and play at any
+time, without the admin needing to be online. **Current phase (chosen 2026-08-16): self-hosted
+instead** — the admin runs the game on their own machine, and it's reachable only while they're
+actively hosting a session (see SELF_HOSTING.md). This is a deliberate, revisitable choice, not a
+scope cut: the always-on path (Railway) is fully built and verified, just paused (DEPLOY.md), and
+switching back needs no code changes. Every change made to the world is saved permanently regardless
+of which hosting mode is active. The game is **pure creative / build-only** — no health, mobs,
+hunger, or day/night survival mechanics.
 
 ### Design principles (in priority order)
 1. **Child safety first.** The primary audience is young children. Every feature is evaluated for
    safety before polish or performance. See §7.
 2. **Simple to join, hard to abuse.** No accounts, emails, or passwords from kids — identity comes
    only from an admin-issued join code. Nobody without a code can get in.
-3. **Persistent and self-running.** The world lives on the server and survives restarts; no admin
-   presence is required for play.
+3. **Persistent, and self-running when hosting allows it.** The world lives on the server and
+   survives restarts either way. The *long-term* goal is no admin presence required for play; the
+   *current* phase trades that away deliberately in favor of self-hosting's simplicity and lower
+   exposure (see above) — revisit once the game is more mature.
 4. **Keep it small.** Target is **up to 5 concurrent players** — a friend group, not thousands.
    Prefer simple, boring, reliable technology over anything that scales to millions.
 
@@ -34,7 +42,8 @@ It is **pure creative / build-only** — no health, mobs, hunger, or day/night s
 
 - **Voxel world** — everything in the game is a block; players build and destroy blocks like Minecraft.
 - **Web-based** — runs in a browser, no install.
-- **Online hosted** — a server hosts the game so it is reachable over the internet.
+- **Server-hosted** — a Node server hosts the game; reachable over the internet when cloud-deployed
+  (DEPLOY.md), or over the local network / a tunnel while self-hosted (SELF_HOSTING.md, current mode).
 - **Multiplayer + chat** — up to **5 children** play in the same world simultaneously and can chat.
 - **Join-code identity** — the admin generates unique join codes and shares them.
   - Each join code maps to **one specific display name** (e.g. code `ABCDEFG` → the name "Jack").
@@ -46,7 +55,9 @@ It is **pure creative / build-only** — no health, mobs, hunger, or day/night s
 - **Game feel** — **pure creative / build-only** (no survival mechanics).
 - **Chat** — **free text**, with safety filtering + logging (see §7).
 - **Full persistence** — every block change is saved and reloaded.
-- **Admin-independent** — the game is joinable and playable when the admin is offline.
+- **Admin-independent** *(long-term target; currently paused — see §1)* — the game is joinable and
+  playable when the admin is offline. True when cloud-hosted (DEPLOY.md); not true while self-hosted,
+  by design, since the admin's own machine being off means the server is off too.
 
 ---
 
@@ -63,21 +74,22 @@ Chosen for a tiny player count (≤5), simple hosting, and a manageable single-d
 | Server runtime   | **Node.js** + TypeScript                 | Same language as client; easy WebSocket support. |
 | Realtime transport | **WebSocket** (`ws` library)           | Low-latency player movement, block updates, and chat. |
 | Persistence      | **SQLite** (via `better-sqlite3`)        | Zero-ops, single file, ideal at this scale; backup = copy one file. |
-| Hosting          | **Railway (Hobby)** recommended; **Hetzner CX22 VPS** for best value | Always-on process + durable disk for the SQLite file. |
+| Hosting          | **Self-hosted (current)** — see SELF_HOSTING.md; **Railway** built and ready, paused — see DEPLOY.md | Always-on cloud hosting is the long-term target; self-hosting is simpler and lower-exposure for now. |
 
 **Server is authoritative.** The server is the source of truth for the world and validates every
 block change and chat message. Clients never write directly to storage.
 
-### Hosting decision (see §9 — final pick pending)
-Both keep the world always-on (no sleeping free tiers) and persist SQLite durably. All-in cost is
-**~$5–8/month**, plus an optional domain (~$10–15/year). Prices verified 2026-08-14.
+### Hosting decision (confirmed 2026-08-16 — see §9)
+**Self-hosting, for now.** The admin runs the server on their own machine (`npm run build && npm
+start`); kids connect over the same WiFi (or a tunnel — see SELF_HOSTING.md). No cloud account, no
+monthly cost, no public internet exposure by default. The trade-off is §1's admin-independence
+principle: the game is only reachable while the admin is actively hosting.
 
-- **Railway (Hobby) — recommended, ~$5/mo.** Git-push deploys, automatic HTTPS, WebSockets, small
-  attached volume for the `.db` file. Fits inside the $5 usage credit at 5 players. Near-zero ops.
-- **Hetzner CX22 — best value, ~€4.35 (~$4.60)/mo.** 2 vCPU / 4 GB / 40 GB NVMe; disk included, so
-  SQLite lives on it directly; trivial backups. Trade-off: you manage Node, a process manager
-  (systemd/pm2), and TLS (Caddy makes this trivial).
-- Fly.io (~$2–6, pay-as-you-go) and Render Starter ($7 + disk) are viable but not preferred here.
+**Railway remains the pick for when always-on hosting is wanted again** (~$5/mo, git-push deploys,
+automatic HTTPS/WebSockets, a small attached volume for the `.db` file — fits inside the $5 usage
+credit at 5 players, near-zero ops). `railway.json` and DEPLOY.md are complete and locally verified;
+switching back needs no code changes, just following DEPLOY.md. Hetzner CX22 (~€4.35/mo, best raw
+value, more manual setup) remains the fallback if Railway ever stops fitting.
 
 ---
 
@@ -190,6 +202,7 @@ Commands (npm workspaces monorepo — `shared` / `server` / `client` / `tools`):
   production also serves `client/dist` itself (one process, one port — see [DEPLOY.md](DEPLOY.md)).
 - `npm start` — runs the production server (`tsx src/index.ts` under the hood). Requires `npm run
   build` to have been run first if you want the game client reachable, not just the API/admin panel.
+  This is also how to self-host a real session — see [SELF_HOSTING.md](SELF_HOSTING.md).
 - `npm run typecheck` — `tsc -b` across all four workspace packages.
 - `npm run create-code -w server -- "<name>"` — issue a join code from the CLI (or use `/admin`).
 - `npm run hash-admin-password -w server -- "<password>"` — produces an `ADMIN_PASSWORD_HASH` value.
@@ -197,8 +210,8 @@ Commands (npm workspaces monorepo — `shared` / `server` / `client` / `tools`):
   ad hoc smoke tests, run and discarded per change; see HANDOFF.md for what's been covered.
 - Prefer small, reviewable commits. Do not commit the `/data` directory.
 
-**Current state:** Phases 0-5 built (scaffolding, vertical slice, multiplayer, chat, join codes,
-admin panel); Phase 6 (deploy/durability/backups) in progress. See PLAN.md and HANDOFF.md.
+**Current state:** Phases 0-6 built (scaffolding through deploy-readiness). Self-hosted per §1/§3;
+Railway deploy is ready but paused. See PLAN.md and HANDOFF.md for current detail.
 
 ---
 
@@ -213,7 +226,9 @@ admin panel); Phase 6 (deploy/durability/backups) in progress. See PLAN.md and H
 6. **Chat style** — **free text** (with §7 filtering + logging).
 7. **Build permissions** — **anyone can build anywhere** (no protected zones).
 8. **Game feel** — **pure creative / build-only**.
-9. **Hosting** — **Railway**, confirmed 2026-08-16. See [DEPLOY.md](DEPLOY.md) for the deploy process.
+9. **Hosting** — **self-hosted, for now** (confirmed 2026-08-16); **Railway** picked and built for
+   when always-on hosting is wanted again — see [SELF_HOSTING.md](SELF_HOSTING.md) (current) and
+   [DEPLOY.md](DEPLOY.md) (paused).
 10. **One active session per code** — confirmed yes: joining from a new device takes over the old
     session with a friendly message (never a hard lockout). Implemented and tested, Phase 4.
 

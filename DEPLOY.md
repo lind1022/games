@@ -3,9 +3,11 @@
 How to deploy this to Railway. This is a durable reference — unlike HANDOFF.md, it shouldn't go stale
 as work progresses, only as the deploy process itself changes.
 
-**Status: not yet deployed.** Everything below has been written and locally verified (see HANDOFF.md
-Phase 6), but nobody has run through this checklist against a real Railway account yet — that step
-needs the product owner, since it requires account creation and possibly billing.
+**Status: paused, not yet deployed.** The product owner deliberately chose self-hosting for now (see
+[SELF_HOSTING.md](SELF_HOSTING.md)) — the game is only reachable while they're actively running it,
+rather than always-on. This guide and `railway.json` are complete and locally verified (see HANDOFF.md
+Phase 6) and preserved for when always-on hosting is wanted again; nothing here needs to change to
+pick this back up later, and nothing about self-hosting needs to be undone first.
 
 ---
 

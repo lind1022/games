@@ -28,8 +28,12 @@ import { World, WORLD_CHUNKS, WORLD_SIZE } from './world.js';
 // normally exists to stop. Missing-Origin requests are allowed through
 // (real browsers always send Origin on a WS upgrade; only non-browser
 // clients, e.g. this project's own test scripts, omit it).
+//
+// Comma-separated so a self-hosting owner can allow both localhost (their
+// own testing) and their LAN IP (what a child's device actually connects
+// to) at once, e.g. ALLOWED_ORIGIN="http://localhost:8787,http://192.168.1.42:8787".
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGIN
-  ? [process.env.ALLOWED_ORIGIN]
+  ? process.env.ALLOWED_ORIGIN.split(',').map((origin) => origin.trim())
   : ['http://localhost:5173', 'http://localhost:8787'];
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8787;

@@ -12,18 +12,24 @@ instances rather than the product owner's real dev server, and committed on the 
 go-ahead to move on — it does **not** carry an explicit manual-browser-pass confirmation the way
 Phases 1-4 do (see §3).
 
-Phase 6 (deploy, durability, backups) is **committed, but not yet deployed**. Hosting is decided
-(**Railway**) and the dirty-chunk-flush optimization is being **deliberately skipped**, both per the
-product owner's explicit call. Everything achievable without a real Railway account is done and
-locally verified: boot-time writability assertion, `GET /health`, explicit `0.0.0.0` bind, a real
-`PRAGMA user_version` migration runner, a local `VACUUM INTO` backup mechanism with a rehearsed
-restore, and — the biggest find this phase — **a working production run path that didn't exist
-before** (the server's old `dist/index.js` start command pointed at a build that was never actually
-produced; production now runs `tsx` directly like dev does, and the server now serves the client's
-`vite build` output itself, realizing "one same-origin path works in dev and prod" from Phase 0's own
-stated intent, which had never been wired up). `railway.json` and a new durable **[DEPLOY.md](DEPLOY.md)**
-are written and ready. What's left is the actual deployment, which needs the product owner's Railway
-account directly — see §6.
+Phase 6 (deploy, durability, backups) is **committed** (`a4185cf`), plus a follow-up pivot on top,
+**uncommitted**: the product owner decided to **self-host for now instead of deploying to Railway**
+(their own machine, reachable only while they're actively hosting a session — not always-on), with
+Railway explicitly kept as the path to switch back to once the game is more mature. The
+dirty-chunk-flush optimization is also being **deliberately skipped**, per the product owner's
+explicit call. Everything achievable without a real Railway account is done and locally verified:
+boot-time writability assertion, `GET /health`, explicit `0.0.0.0` bind, a real `PRAGMA user_version`
+migration runner, a local `VACUUM INTO` backup mechanism with a rehearsed restore, and — the biggest
+find this phase — **a working production run path that didn't exist before** (the server's old
+`dist/index.js` start command pointed at a build that was never actually produced; production now
+runs `tsx` directly like dev does, and the server now serves the client's `vite build` output itself,
+realizing "one same-origin path works in dev and prod" from Phase 0's own stated intent, which had
+never been wired up). This same production path is exactly what self-hosting needs, so the pivot
+required almost no new code — just a small `ALLOWED_ORIGIN` improvement (comma-separated list, so a
+self-hosting owner can allow both `localhost` and their LAN IP at once) and two new docs:
+**[SELF_HOSTING.md](SELF_HOSTING.md)** (current, primary path) and **[DEPLOY.md](DEPLOY.md)** (Railway,
+paused but complete and ready). CLAUDE.md §1/§3/§9 were updated to reflect self-hosting as the current
+mode without losing the Railway path or the long-term always-on intent. See §6.
 
 ---
 
@@ -266,7 +272,7 @@ codes, live online-players list, chat log review, and the four named moderation 
   "<password>"` prints an `ADMIN_PASSWORD_HASH` value to set as an env var. The plaintext password
   is never stored anywhere.
 
-### Phase 6 — deploy, durability, backups (**uncommitted**, in progress)
+### Phase 6 — deploy, durability, backups (committed, pushed: `a4185cf`)
 Hosting: **Railway, confirmed** (product owner's call — see updated CLAUDE.md §9). Everything below
 is locally verified against throwaway server instances and throwaway data directories (never the real
 dev DB), since actually deploying needs the product owner's Railway account — see the new
@@ -329,6 +335,33 @@ something this session can do); shipping backups off-box to R2/S3 (needs cloud s
 the dirty-chunk-flush + crash-recovery-replay optimization (PLAN.md C6) — **the product owner
 confirmed skipping this**, matching the recommendation above (write-through is already durable, and
 this project's scale doesn't need the optimization it trades away simplicity for).
+
+### Self-hosting pivot (**uncommitted**, on top of Phase 6)
+After Phase 6 shipped, the product owner asked how much work it'd be to self-host instead of deploying
+to Railway — "joinable only when the owner is playing" — with the explicit intent to switch to Railway
+later once the game is more mature. Answer, confirmed by how little changed: almost none, because the
+Phase 6 production path (single process, single port, server serves the built client itself) already
+*is* the right shape for self-hosting — the only gap was that `ALLOWED_ORIGIN` only accepted one value,
+which would reject either the owner's own `localhost` testing or a LAN device, not both at once.
+
+- **`server/src/index.ts`** — `ALLOWED_ORIGIN` now accepts a comma-separated list. Verified with a
+  real (non-`ws`-library, actual `Origin`-header-setting) WebSocket client against all three cases:
+  a `localhost` origin in the list connects, a LAN-shaped origin (`http://192.168.1.42:8793`) in the
+  list connects, and an origin not in the list is rejected with 403 — proving the allowlist logic
+  (already correct from Phase 4) generalizes to multiple values correctly, not just that it compiles.
+- **`SELF_HOSTING.md`** (new) — the current primary how-to: use `npm run build && npm start` (not
+  `npm run dev`, which splits across two ports and isn't LAN-friendly), find your LAN IP, set
+  `ALLOWED_ORIGIN` to match, still set real `JOIN_CODE_PEPPER`/`ADMIN_PASSWORD_HASH` (self-hosting
+  doesn't relax those), and options for reaching kids beyond your own WiFi if needed (tunnel, or —
+  explicitly not recommended — router port forwarding).
+- **`DEPLOY.md`** — status line updated to "paused," pointing at SELF_HOSTING.md, explicit that
+  nothing in it needs to change and nothing about self-hosting needs undoing to pick it back up later.
+- **`CLAUDE.md`** — this is the second time hosting has changed since the file's original "final pick
+  pending" state, so updated more thoroughly than a one-line decision flip: §1's vision and design
+  principle #3, §2's "Admin-independent" bullet, §3's stack table + hosting-decision prose, and §9's
+  decision list all now distinguish the *long-term* always-on goal from the *current* self-hosted
+  choice, rather than overwriting one with the other — the top-of-file Status line (stale since
+  before Phase 0, still saying "Greenfield / pre-code") was also fixed while touching this file.
 
 ---
 
@@ -558,30 +591,26 @@ interactive behavior (§3 Phase 3), the join screen (§3 Phase 4), and the admin
 
 ---
 
-## 6. Next up: the product owner runs DEPLOY.md against a real Railway account
+## 6. Next up: try self-hosting a real session
 
-Two decisions that were open are now resolved: **hosting is Railway** (product owner's call, folded
-back into CLAUDE.md §9 per its own instruction to do so as decisions are made), and **the
-dirty-chunk-flush optimization (PLAN.md C6) is being skipped deliberately** (product owner confirmed
-the recommendation: pure write-through already makes every change durable immediately, which already
-satisfies Phase 6's actual correctness "done when" criterion, and this project's ≤5-player scale is
-unlikely to need the write-amplification optimization that buffer would trade simplicity away for).
+Hosting mode is now **self-hosted, deliberately** (superseding the earlier "Railway confirmed" —
+see the pivot above), and **the dirty-chunk-flush optimization (PLAN.md C6) is being skipped**
+deliberately too (pure write-through already makes every change durable immediately, satisfying
+Phase 6's actual correctness "done when" criterion, and this project's ≤5-player scale is unlikely to
+need the write-amplification optimization that buffer would trade simplicity away for).
 
-What's left in Phase 6 genuinely needs the product owner directly, since none of it is achievable from
-this session — creating a Railway account, attaching a real volume, and setting real secrets all need
-their account access:
+The immediate next step doesn't need an account or any external setup — just follow
+[SELF_HOSTING.md](SELF_HOSTING.md) §2's quick start on the machine that'll host: `npm run build`, set
+the three env vars (a real `JOIN_CODE_PEPPER`, an `ADMIN_PASSWORD_HASH`, and `ALLOWED_ORIGIN` matching
+your LAN IP), `npm start`, then try joining from a second device on the same WiFi to confirm it
+actually works end-to-end on real hardware (this session verified the mechanics — origin allowlisting,
+single-port serving — but not an actual second physical device on a real LAN).
 
-1. **Follow [DEPLOY.md](DEPLOY.md)** for the actual Railway setup — account/project creation, volume
-   mount, the four required env vars (`DATA_DIR`, `JOIN_CODE_PEPPER`, `ADMIN_PASSWORD_HASH`,
-   `ALLOWED_ORIGIN`), and first deploy. `railway.json` is checked in and should make Railway's build/
-   start/health-check config close to automatic, but it's unverified against a real account — the
-   first deploy is also the first real test of it.
-2. **Run through DEPLOY.md §3's post-deploy checklist** — this is where PLAN.md's actual Phase 6 "done
-   when" criteria get checked for the first time, since they need a real public deployment to test at
-   all (redeploy-preserves-data canary, WSS through Railway's proxy, mid-session kill losing nothing).
-3. **Off-box backup storage** (R2/S3 or similar) is still not wired up — needs cloud storage
-   credentials. The local `VACUUM INTO` mechanism is done and rehearsed (§2), but see DEPLOY.md §4 for
-   why that alone isn't real disaster recovery yet.
+Whenever always-on hosting is wanted again: [DEPLOY.md](DEPLOY.md) is complete and ready, and its own
+§6-equivalent (its post-deploy checklist) is where PLAN.md's Railway-specific "done when" criteria
+(redeploy-preserves-data canary, WSS through Railway's proxy) would finally get checked for the first
+time against a real deployment — nothing currently verifies those specifically, since self-hosting
+doesn't need Railway's redeploy/proxy behavior at all.
 
 Two things worth doing before real kids ever get a code, independent of the above:
 - **Seed `chatFilter.ts`'s `WHITELIST`** with real children's names and school-specific vocabulary
