@@ -111,13 +111,42 @@ function attemptJoin(payload: JoinPayload): void {
   joinErrorEl.textContent = '';
   statusEl.textContent = 'Connecting…';
 
+  // A server-sent `error` (onError) is always followed by the server
+  // closing the socket (onClose) moments later. This flag stops onClose's
+  // generic fallback message from stomping the specific one onError just
+  // showed — it only kicks in for closes onError never got a chance to
+  // explain (transport-level failures: server unreachable, tunnel down,
+  // a network hiccup during the handshake).
+  let failureHandled = false;
+
+  function resetJoinForm(message: string): void {
+    if ('sessionToken' in payload) {
+      localStorage.removeItem(SESSION_TOKEN_KEY);
+    }
+    joinSubmitEl.removeAttribute('aria-disabled');
+    joinCodeInputEl.disabled = false;
+    joinErrorEl.textContent = message;
+    joinScreenEl.classList.remove('hidden');
+    statusEl.textContent = `Loading… (protocol v${PROTOCOL_VERSION})`;
+  }
+
   net = new Net(payload, {
     onOpen: () => {
       statusEl.textContent = 'Connecting…';
     },
     onClose: () => {
-      statusEl.textContent = 'Disconnected — reload to reconnect';
+      const wasJoined = joined;
       joined = false;
+      if (wasJoined) {
+        statusEl.textContent = 'Disconnected — reload to reconnect';
+        return;
+      }
+      if (failureHandled) return; // onError already explained this and reset the form
+      // The connection closed before we ever got world-state, and without
+      // a server-sent error first — a transport-level failure. Without
+      // this, the join form is left disabled with no explanation at all —
+      // exactly a silent "nothing happens when I click Join" bug.
+      resetJoinForm('Could not connect — please check your connection and try again.');
     },
     onError: (msg) => {
       console.error('[server error]', msg.message);
@@ -125,19 +154,13 @@ function attemptJoin(payload: JoinPayload): void {
         appendSystemMessage(msg.message);
         return;
       }
+      failureHandled = true;
       // A join attempt failed. If it was a stored-session resume, the
       // token is stale (expired/revoked/superseded) — drop it and fall
       // back to asking for a fresh code rather than retrying it forever.
-      if ('sessionToken' in payload) {
-        localStorage.removeItem(SESSION_TOKEN_KEY);
-      }
-      joinSubmitEl.removeAttribute('aria-disabled');
-      joinCodeInputEl.disabled = false;
+      resetJoinForm(msg.message);
       joinCodeInputEl.value = '';
       joinCodeInputEl.focus();
-      joinErrorEl.textContent = msg.message;
-      joinScreenEl.classList.remove('hidden');
-      statusEl.textContent = `Loading… (protocol v${PROTOCOL_VERSION})`;
     },
     onWorldState: (msg) => {
       for (const chunk of msg.chunks) {

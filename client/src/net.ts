@@ -41,6 +41,14 @@ export class Net {
       this.handlers.onOpen();
       this.send({ type: 'join', protocolVersion: PROTOCOL_VERSION, ...joinPayload });
     });
+    // A transport-level failure (server unreachable, tunnel down, etc.)
+    // fires this 'error' event and then 'close' — never a server-sent
+    // `error` message, since no connection was ever established. This
+    // listener exists purely for diagnostics in the browser console;
+    // handlers.onClose() is what actually drives the UI's response.
+    this.socket.addEventListener('error', () => {
+      console.error('[net] WebSocket connection error — see the Network tab for details');
+    });
     this.socket.addEventListener('close', () => this.handlers.onClose());
     this.socket.addEventListener('message', (event) => this.handleMessage(event));
   }
