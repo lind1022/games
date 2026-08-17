@@ -695,13 +695,26 @@ need the write-amplification optimization that buffer would trade simplicity awa
 was never conclusively root-caused. If it comes back, get browser console errors and whether an
 in-tab reload (not a new tab) also fixes it; that'll narrow it down fast.
 
-Two things worth doing before real kids ever get a code:
-- **Seed `chatFilter.ts`'s `WHITELIST`** with real children's names and school-specific vocabulary
-  once real codes exist — it's still empty; PLAN.md flags this as a critical pre-launch step.
-- **Confirm `JOIN_CODE_PEPPER` and `ADMIN_PASSWORD_HASH` are real, distinct secrets** (not left over
-  from any of this session's testing/debugging) before any child actually gets a code — every
-  environment falls back to a hardcoded insecure pepper if unset, and the admin panel is simply
-  unreachable without the password hash set.
+Both pre-launch items from the previous version of this section are now done:
+- **`chatFilter.ts`'s `WHITELIST` is seeded** (`462a5a0`): real display names issued so far (`Eddie`,
+  `Jayson`) plus Pinehurst School's campus vocabulary from `school map.png` / PLAN.md §3 (`college`,
+  `field`, `library`, `gym`, `theatre`, `administration`, `primary admin`, `maintenance`, `afsc`,
+  `carpark`, `drop-off zone`, `pinehurst`). Smoke-tested (script written and discarded, not checked
+  in): all of it stays clean, real profanity is still caught, and none of the new terms actually
+  collided with the blacklist as substrings today — this is precautionary defense-in-depth, not a fix
+  for a live false positive. **Add more names here as more join codes get issued** — only two real
+  names are seeded so far. One unrelated gap surfaced by the smoke test, not fixed: **`"tits"` (plural)
+  is not caught by the obscenity dataset, though `"tit"` (singular) is** — confirmed pre-existing via
+  `git stash` (same on `main` before the whitelist change), not something the whitelist edit caused or
+  fixes. Flagged, not addressed.
+- **`JOIN_CODE_PEPPER` and `ADMIN_PASSWORD_HASH` verified as real, distinct secrets**, not testing
+  leftovers: the pepper is 32 bytes of hex, distinct from the hardcoded insecure fallback in
+  `auth.ts`; the hash's params (`m=65536,p=4,t=3`) match the `argon2` package's own defaults, i.e.
+  exactly what `hashAdminPassword.ts` produces; neither value has ever appeared in git history on any
+  branch (`git log --all -S` on both, zero hits). Product owner confirmed keeping both as-is rather
+  than rotating — note for later: rotating `JOIN_CODE_PEPPER` would invalidate every already-issued
+  code (`code_hash = HMAC-SHA256(code, pepper)`), so a future rotation needs reissuing codes alongside
+  it, not just swapping the env var.
 
 Also still open from Phase 5: the admin **page** itself (as opposed to the actions it drives, which
 are scripted-verified) hasn't had an explicit manual-browser confirmation — §3's checklist is there
