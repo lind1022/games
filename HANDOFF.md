@@ -707,6 +707,18 @@ deliberately too (pure write-through already makes every change durable immediat
 Phase 6's actual correctness "done when" criterion, and this project's ≤5-player scale is unlikely to
 need the write-amplification optimization that buffer would trade simplicity away for).
 
+**Phase 7 (school map importer) is next per PLAN.md's build order, and is now unblocked.** It had been
+sitting untouched since Phase 6, and — a real gap — this file didn't say so until the product owner
+asked why. PLAN.md §8's three blocking questions are now answered (D4-D6, `8b4eda6`): no building's
+upper floors matter; nothing needs excluding beyond the event-overlay layer already planned for
+stripping (plus two classification details: Field 1/2/3 have soccer goals, and the P-numbered pods are
+primary classrooms); and the scale-anchor courts are **6 tennis courts (A-F), not netball** as this
+project's own earlier map inspection had guessed — corrected before it could mis-scale the whole
+import. One loose end for whoever builds Phase 7: PLAN.md's original inspection read the pod count as
+P1–P23, the product owner recalls P1–P22 — recount against the actual image before hardcoding either.
+Phase 7 itself (the importer: `sharp` decode, palette classification, diff-PNG review — see PLAN.md
+Phase 7 for the full task list) has **not been started**.
+
 **Watch for recurrence of the unresolved "blank blue world" bug** (§5) — it stopped reproducing but
 was never conclusively root-caused. If it comes back, get browser console errors and whether an
 in-tab reload (not a new tab) also fixes it; that'll narrow it down fast.
