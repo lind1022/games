@@ -50,18 +50,43 @@ const WHITELIST: readonly string[] = [
 
 const builtDataset = englishDataset.build();
 
-const matcher = new RegExpMatcher({
-  ...builtDataset,
+const sharedWhitelistOptions = {
   whitelistedTerms: [...(builtDataset.whitelistedTerms ?? []), ...WHITELIST],
   whitelistMatcherTransformers: englishRecommendedTransformers.whitelistMatcherTransformers,
-  // The recommended preset deliberately omits skipNonAlphabeticTransformer
-  // (upstream issues #23/#46 — it can over-match across word boundaries).
-  // We add it back: this is a mask-don't-block system, so a false positive
-  // just over-asterisks a harmless phrase, while a false negative lets
-  // spaced-out evasion ("f u c k", "f.u.c.k") straight through — the wrong
-  // side to err on for a children's chat filter. Verified against a battery
-  // of cross-word-boundary phrases ("class assignment", "the assassin
-  // game", "glass door", etc.) with no false positives before adopting.
+};
+
+// Two matchers, not one, run together — never one instead of the other.
+//
+// `strictMatcher` uses the library's own recommended transformers: it's the
+// one that correctly catches ordinary mid-sentence placement.
+//
+// `evasionMatcher` additionally adds skipNonAlphabeticTransformer() (upstream
+// issues #23/#46) to catch letter-spaced evasion ("f u c k", "f.u.c.k") the
+// strict matcher misses. But it has a serious trade-off, found empirically
+// while smoke-testing: patterns anchored on BOTH sides by a word-boundary
+// assertion (e.g. `|tit|`, `|prick[s]|`) stop matching whenever the flagged
+// word is sandwiched between other words, because the transformer strips the
+// surrounding spaces the boundary assertion needs — e.g. "shit now" and
+// "this is shit" still match (word at the very start/end), but "hey shit
+// now" (word in the middle — the common case in real sentences) silently
+// doesn't. This isn't specific to one word: it silently defeated ~20
+// dataset entries this way, including core words like "shit", "cunt",
+// "rape", "cock", "fag", "whore", and "sex". Running BOTH matchers and
+// unioning their matches (below) keeps both properties instead of trading
+// one for the other: strictMatcher's mid-sentence detection is never
+// weakened, and evasionMatcher still adds its spaced-out-evasion catches.
+// Verified against a battery of cross-word-boundary phrases ("class
+// assignment", "the assassin game", "grass stains", "glass door", etc.)
+// with no false positives from either matcher.
+const strictMatcher = new RegExpMatcher({
+  ...builtDataset,
+  ...sharedWhitelistOptions,
+  blacklistMatcherTransformers: englishRecommendedTransformers.blacklistMatcherTransformers,
+});
+
+const evasionMatcher = new RegExpMatcher({
+  ...builtDataset,
+  ...sharedWhitelistOptions,
   blacklistMatcherTransformers: [
     ...(englishRecommendedTransformers.blacklistMatcherTransformers ?? []),
     skipNonAlphabeticTransformer(),
@@ -109,7 +134,7 @@ function normalize(text: string): string {
 export function filterChatMessage(rawText: string): ChatFilterResult {
   const text = normalize(rawText);
 
-  const matches = matcher.getAllMatches(text);
+  const matches = [...strictMatcher.getAllMatches(text), ...evasionMatcher.getAllMatches(text)];
   const filteredMessage = matches.length > 0 ? censor.applyTo(text, matches) : text;
 
   const piiReasons = PII_HEURISTICS.filter((h) => h.pattern.test(text)).map((h) => h.reason);
