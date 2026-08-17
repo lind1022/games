@@ -13,14 +13,40 @@ import {
  * flag for logging. Filtering is entirely in-process — no child's chat text
  * ever leaves this server to a third-party moderation API.
  *
- * WHITELIST is empty for now — there are no real children's names or
- * school-specific vocabulary yet (dev-stub identity, Phases 1-3). PLAN.md
- * calls seeding this out as a **critical pre-launch step**: add every
- * child's display name and school vocabulary here, then smoke-test them
- * through the filter, before Phase 4 goes live with real names. The
- * Scunthorpe problem bites hardest on exactly names and places.
+ * WHITELIST covers real children's display names and school-specific
+ * vocabulary (PLAN.md's critical pre-launch step — the Scunthorpe problem
+ * bites hardest on exactly names and places). Lowercase: the library's
+ * recommended whitelist transformers lowercase the input before matching,
+ * so terms are written lowercase to match. Entries are substrings, not
+ * whole-word matches — e.g. 'college' also covers 'College 1'..'College 5'
+ * and 'field' covers 'Field 1'..'Field 3', per PLAN.md §3's map inspection.
+ * Smoke-tested (not checked in): none of these actually collide with the
+ * dataset's blacklist as substrings today, so this is precautionary
+ * defense-in-depth rather than a fix for a live false positive — add new
+ * names/terms here as more join codes are issued or more vocabulary comes
+ * up, and re-run the smoke test rather than assuming it's still clean.
  */
-const WHITELIST: readonly string[] = [];
+const WHITELIST: readonly string[] = [
+  // Real children's display names (join codes issued so far)
+  'eddie',
+  'jayson',
+
+  // School name and campus vocabulary (school map.png via PLAN.md §3)
+  'pinehurst',
+  'pinehurst school',
+  'college',
+  'junior college',
+  'theatre',
+  'library',
+  'gym',
+  'administration',
+  'primary admin',
+  'maintenance',
+  'afsc',
+  'field',
+  'carpark',
+  'drop-off zone',
+];
 
 const builtDataset = englishDataset.build();
 
