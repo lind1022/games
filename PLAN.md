@@ -3,9 +3,11 @@
 Working plan for the voxel school game specified in [CLAUDE.md](CLAUDE.md). CLAUDE.md is the
 durable **spec** (what and why); this file is the **build order** (in what sequence, done when).
 
-> **Status:** pre-code. Repo contains `CLAUDE.md` and `school map.png` only — no `package.json`,
-> no git repo. Strategy confirmed by the product owner: **playable demo first**. Host: **Railway
-> Hobby (~$5/mo)**. Plan produced 2026-08-15.
+> **Status (updated 2026-08-17):** Phases 0-6 built and committed — see [HANDOFF.md](HANDOFF.md) for
+> current detail. Hosting is currently **self-hosted** (a deliberate, revisitable choice; see
+> CLAUDE.md §1/§3), not the Railway Hobby plan this file originally assumed — Railway remains ready
+> to switch back to via [DEPLOY.md](DEPLOY.md). **Phase 7 (school map importer) is next and is now
+> unblocked**: all three blocking questions in §8 are answered (D4-D6, confirmed 2026-08-17).
 >
 > **Living document.** Tick items off, revise estimates, and fold decisions back into CLAUDE.md as
 > they're confirmed. Phases 7–8 will need revisiting once the importer meets the real map.
@@ -100,19 +102,22 @@ I inspected `school map.png` (2326 × 1390 RGBA) directly. Findings that the pla
 
 **Consequence — there are no interior walls.** Buildings appear as **footprint outlines only**:
 College 1–5 & Theatre, Junior College, Library, Gym, Administration, Primary Admin, Maintenance,
-AFSC, and a large cluster of numbered pods P1–P23. No rooms, no corridors, no doors. CLAUDE.md §4
-assumes "floor-plan image → walls, floors, doors"; **that assumption does not hold for this image.**
-As written, the importer can only produce hollow building shells. This is the single biggest open
-product question — see Q1.
+AFSC, and a large cluster of numbered pods **P1–P23** (this session's count from the image — the
+product owner separately recalls **P1–P22**; per §8 D5, unresolved, recount against the actual pixels
+before Phase 7 hardcodes a number). The pods are confirmed (§8 D5) to be **primary school
+classrooms**. No rooms, no corridors, no doors. CLAUDE.md §4 assumes "floor-plan image → walls,
+floors, doors"; **that assumption does not hold for this image.** As written, the importer can only
+produce hollow building shells (§8 D1 accepts this).
 
 **Event annotations must be stripped, not imported.** Overlaid in red/blue and unrelated to the
 school: "Ct A & F", "Ct 1&2", "Ct 3&4", "Ct 5&6", the large "GYM" label, two "Control Room" labels,
 "Warm Up Area", blue directional arrows, coffee and hot-dog vendor icons, and the green/blue court
 diagram lettered A–F at bottom-left. Left in, these bake nonsense blocks into the world.
 
-**Genuinely importable features:** building footprints; Field 1, 2, 3; carpark and drop-off zone;
-paths and roads; **two stormwater settlement ponds** (cyan → water blocks); a large number of trees
-(drawn as line-art circles); parking areas.
+**Genuinely importable features:** building footprints; Field 1, 2, 3 (confirmed §8 D5: **grass with
+soccer goals**, not bare grass — the goals need their own palette entry, not just a flat-fill match);
+carpark and drop-off zone; paths and roads; **two stormwater settlement ponds** (cyan → water blocks);
+a large number of trees (drawn as line-art circles); parking areas.
 
 **Good news for classification:** it is clean vector-style art — flat fills, crisp edges, no JPEG
 noise. Palette matching should work; the polygon-tracing fallback is probably unnecessary.
@@ -121,7 +126,13 @@ noise. Palette matching should work; the polygon-tracing fallback is probably un
 fills, parking-bay hatching, and a dashed site-boundary line.
 
 **No scale bar and no legend.** Calibrate `pixelsPerMetre` against a known-size feature — the marked
-courts at bottom-left are the best anchor (a netball court is 30.5 × 15.25 m).
+courts at bottom-left are the best anchor. **Correction (§8 D6):** this session guessed netball
+(30.5 × 15.25 m); the product owner confirms they're actually **6 tennis courts, lettered A–F**
+(standard doubles court: 23.77 × 10.97 m — use 23.77 × 8.23 m if the drawn lines are singles-width;
+check when the image is actually open). **Disambiguate two things in that same bottom-left area before
+calibrating:** the *actual to-scale courts* on the site plan (the calibration reference) versus the
+separately-noted **event-overlay "court diagram" legend** two paragraphs up, which is annotation noise
+to strip, not the real courts — don't calibrate against the wrong one.
 
 **The footprint is irregular and not square.** CLAUDE.md's "283 m × 283 m" is illustrative only; the
 site is a rotated, irregular polygon roughly 1.67:1. At 80,000 m² that's a bounding box nearer
@@ -401,13 +412,24 @@ archive older rows to gzipped NDJSON off-box, then delete — `block_changes` is
 - **D3 — `school map.png` stays out of git.** Gitignored, kept locally. It's a real school's site
   layout, and this matches the §7 posture. Reversible if it becomes inconvenient.
 
-### Open — blocking Phase 7 (map import)
+### Decided 2026-08-17 — unblocks Phase 7
 
-1. **Multi-storey.** Do any buildings have upper floors that matter, given the flat single-floor decision?
-2. **Exclusion zones.** Anything to leave out — neighbouring property, staff-only areas, the maintenance
-   compound?
-3. **Scale anchor.** One confirmed real measurement (a court or field dimension) to calibrate
-   pixels→metres. The marked courts are the best candidate if you can confirm their size.
+- **D4 — Multi-storey: ignored.** No Pinehurst building has upper floors that matter for the import;
+  every footprint is single-floor, matching the flat-world decision. No special-casing needed.
+- **D5 — Exclusion zones: none, beyond the already-planned event-layer strip** (§3's red/blue overlay,
+  court diagram, vendor icons, etc. — that was always going to be stripped, not imported). Two useful
+  classification details confirmed along the way, for the palette config: **Field 1/2/3 are grass
+  areas with soccer goals** (not bare grass — the importer should account for goal posts, not just a
+  flat-fill match), and **the P-numbered pods are primary school classrooms** (still hollow shells per
+  D1, but worth tagging as classrooms rather than generic "pod" in any palette metadata/labels).
+  **Discrepancy to verify visually when Phase 7 actually opens the image:** §3's original inspection
+  read the pod numbering as **P1–P23**; the product owner recalls **P1–P22**. Neither has been
+  re-confirmed against the image pixel-by-pixel — check this directly before hardcoding a pod count.
+- **D6 — Scale anchor: the marked courts are 6 tennis courts (A–F), not netball.** §3's and item 3's
+  original guess (a netball court, 30.5 × 15.25 m) was wrong — corrected here before it could produce
+  a mis-scaled world. Use a standard tennis court for calibration instead: **23.77 × 10.97 m** (doubles;
+  use 23.77 × 8.23 m if the drawn courts are clearly singles-width — check line markings in the image
+  when Phase 7 opens it).
 
 ### Open — before launch
 
@@ -431,6 +453,7 @@ archive older rows to gzipped NDJSON off-box, then delete — `block_changes` is
 
 ## 9. Suggested next step
 
-**Nothing blocks starting.** Phase 0 depends on none of the remaining open questions — the first
-commit is the workspace skeleton plus the `/shared` contracts from §1, with the Railway spike running
-alongside Phase 1. The Phase 7 questions (1–3) only need answering once the importer is next up.
+**Phase 7 (school map importer) is next, and nothing blocks starting it.** Phases 0-6 are done (see
+HANDOFF.md); §8's D4-D6 close out the three questions that were blocking Phase 7. Remaining
+open items (§8 "before launch" / "can default") don't gate Phase 7 — they matter before real kids get
+codes (already partly addressed, see HANDOFF.md §6), not before the importer can be built.
