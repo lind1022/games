@@ -5,12 +5,22 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-16:** Phases 0-6 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
+**As of 2026-08-17:** Phases 0-6 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
 `f3e4edc`, `c6449b0`, `a4185cf`). Phase 5 (admin panel, plus a Reissue action and a raised chat-log
-display cap added after initial review) was scripted-end-to-end-tested against throwaway server
-instances rather than the product owner's real dev server, and committed on the product owner's
-go-ahead to move on — it does **not** carry an explicit manual-browser-pass confirmation the way
-Phases 1-4 do (see §3).
+display cap added after initial review) was originally scripted-end-to-end-tested against throwaway
+server instances only, and committed on the product owner's go-ahead to move on without the explicit
+manual-browser-pass confirmation Phases 1-4 carry — **that gap is now closed** (see §3): the product
+owner walked the full checklist against another throwaway instance and confirmed everything works,
+no issues found.
+
+Two more things landed since: `chatFilter.ts`'s `WHITELIST` is seeded with real names/school
+vocabulary and `JOIN_CODE_PEPPER`/`ADMIN_PASSWORD_HASH` were verified as real, never-leaked secrets
+(`462a5a0`, `992c56c` — see §6 for detail); and a real bug in the chat filter itself was found and
+fixed (`2988df0`): the Phase 3 `skipNonAlphabeticTransformer()` addition, adopted to catch spaced-out
+evasion like "f u c k", turned out to silently defeat detection of ~20 core blacklisted words
+(including "shit", "cunt", "rape", "cock", "fag", "whore", "sex") whenever they appeared mid-sentence
+rather than at the very start/end of a message — the common case in real chat. Fixed by running two
+matchers in parallel instead of one and unioning their matches, so neither property is traded away.
 
 **Self-hosting is live and confirmed working by the product owner** — not just this session's own
 rehearsal (§2/§4) but real usage: they stood up a Cloudflare quick tunnel, hit some real setup
@@ -448,30 +458,36 @@ takeover, rate limiting, and DB persistence were scripted-E2E-verified first (§
 then tested the join screen itself directly (invalid code, valid code, reload-to-resume, second-tab
 takeover) and confirmed it all works.
 
-### Phase 5 — committed on the product owner's go-ahead
-No browser automation tool was available in this session. Every admin action was verified end-to-end
-via `fetch`/`WebSocket` against **throwaway server instances** on separate ports with temporary
-`DATA_DIR`s (§4) — specifically so the product owner's actual running dev server, with its real test
-data, was never touched by this testing. The product owner reviewed the work and directed moving on
-to Phase 6 without walking the manual checklist step-by-step in this session — unlike Phases 1-4, this
-one does **not** carry an explicit "tried it in a browser, works" confirmation. If anything about the
-admin page itself (as opposed to the actions it drives, which are scripted-verified) turns out to be
-off, that's the first place to look.
+### Phase 5 — committed on the product owner's go-ahead; manual browser pass now done
+No browser automation tool was available when Phase 5 was built. Every admin action was verified
+end-to-end via `fetch`/`WebSocket` against **throwaway server instances** on separate ports with
+temporary `DATA_DIR`s (§4) — specifically so the product owner's actual running dev server, with its
+real test data, was never touched by this testing. The product owner reviewed the work and directed
+moving on to Phase 6 without walking the manual checklist step-by-step in that session — unlike
+Phases 1-4, it shipped without an explicit "tried it in a browser, works" confirmation at the time.
 
-The checklist below is preserved for whenever that manual pass does happen. To try it, the
-*currently-running* `npm run dev` doesn't have `ADMIN_PASSWORD_HASH` set (env vars are fixed at
-process launch), so either stop it and restart with the var set, or run a second instance on a spare
-port:
+**That gap is now closed.** A later session (no browser automation available in it either) stood up
+another throwaway instance the same way — separate port (`8799`), temporary `DATA_DIR`, real dev
+server on `8787` left untouched throughout — and the product owner walked the full checklist below
+directly in a browser: login (wrong password, then right), creating a code from the admin page itself,
+join-and-appear-in-online-list, mute/unmute, kick, rejoin + place blocks + rollback, reissue, revoke,
+and the chat log viewer's filters. **Confirmed: everything looks good, no issues found.** The throwaway
+instance and its data dir were torn down afterwards; nothing from this pass persists anywhere.
+
+The steps, preserved here in case the admin page changes and this needs re-walking:
 
 ```sh
 npm run hash-admin-password -w server -- "<pick a password>"
-# copy the printed ADMIN_PASSWORD_HASH= line, then:
-ADMIN_PASSWORD_HASH='<paste the hash>' npm run dev
+# copy the printed ADMIN_PASSWORD_HASH= line, then run a throwaway instance on a spare port
+# with a temporary DATA_DIR (never the real dev server/DB):
+PORT=8799 DATA_DIR=/tmp/some-throwaway-dir JOIN_CODE_PEPPER='<any value>' \
+  ADMIN_PASSWORD_HASH='<paste the hash>' ALLOWED_ORIGIN='http://localhost:8799' \
+  npx tsx server/src/index.ts
 ```
 
-Then visit **http://localhost:5173/../admin** — i.e. **http://localhost:8787/admin** directly (the
-admin page is served by the game server, not through Vite's dev proxy, so it's on port 8787 not 5173).
-Suggested checklist:
+Visit `http://localhost:8799/admin` (the admin page is served by the game server directly, not
+through Vite's dev proxy) and `http://localhost:8799` for the game client (needs `client/dist` built
+via `npm run build` first — the throwaway server serves it the same way production does). Checklist:
 - Log in with the wrong password (see an error), then the right one (see the dashboard).
 - Create a code for a test name; the plaintext code banner appears once. Join in a separate browser
   tab with that code (see the join-code screen from Phase 4) and confirm the player appears in the
@@ -703,10 +719,9 @@ Both pre-launch items from the previous version of this section are now done:
   in): all of it stays clean, real profanity is still caught, and none of the new terms actually
   collided with the blacklist as substrings today — this is precautionary defense-in-depth, not a fix
   for a live false positive. **Add more names here as more join codes get issued** — only two real
-  names are seeded so far. One unrelated gap surfaced by the smoke test, not fixed: **`"tits"` (plural)
-  is not caught by the obscenity dataset, though `"tit"` (singular) is** — confirmed pre-existing via
-  `git stash` (same on `main` before the whitelist change), not something the whitelist edit caused or
-  fixes. Flagged, not addressed.
+  names are seeded so far. One unrelated gap surfaced by the smoke test — initially reported here as
+  just `"tits"` (plural) not being caught — turned out on investigation to be a much bigger, since-fixed
+  issue; see below.
 - **`JOIN_CODE_PEPPER` and `ADMIN_PASSWORD_HASH` verified as real, distinct secrets**, not testing
   leftovers: the pepper is 32 bytes of hex, distinct from the hardcoded insecure fallback in
   `auth.ts`; the hash's params (`m=65536,p=4,t=3`) match the `argon2` package's own defaults, i.e.
@@ -715,10 +730,21 @@ Both pre-launch items from the previous version of this section are now done:
   than rotating — note for later: rotating `JOIN_CODE_PEPPER` would invalidate every already-issued
   code (`code_hash = HMAC-SHA256(code, pepper)`), so a future rotation needs reissuing codes alongside
   it, not just swapping the env var.
+- **Fixed a real chat-filter bug** (`2988df0`): the `"tits"` report above turned out to be one symptom
+  of a much bigger issue. `skipNonAlphabeticTransformer()` (added in Phase 3 to catch spaced-out
+  evasion like "f u c k") strips the spaces that word-boundary-anchored blacklist patterns (e.g.
+  `|shit|`, `|cunt|`, `|tit|`) rely on — so those words stopped matching whenever sandwiched between
+  other words. "shit now" and "this is shit" still matched (word at the very start/end of the
+  message); "hey shit now" — ordinary mid-sentence placement — silently didn't. Confirmed this
+  silently defeated ~20 dataset words, including "shit", "cunt", "rape", "cock", "fag", "whore", "sex".
+  Fixed by running two matchers (one with the transformer, one without) and unioning their matches,
+  instead of trading mid-sentence detection away for evasion detection. Verified against a 39-case
+  battery covering the regressed words mid-sentence, spaced/unicode evasion, the pre-existing
+  cross-word-boundary false-positive checks, and every whitelist term.
 
-Also still open from Phase 5: the admin **page** itself (as opposed to the actions it drives, which
-are scripted-verified) hasn't had an explicit manual-browser confirmation — §3's checklist is there
-whenever that happens.
+Phase 5's admin **page** itself (as opposed to the actions it drives, which were already
+scripted-verified) has now also had its manual-browser pass — see §3: the product owner walked the
+full checklist against a throwaway instance and confirmed everything works, no issues found.
 
 Whenever always-on hosting is wanted again: [DEPLOY.md](DEPLOY.md) is complete and ready, and its own
 post-deploy checklist is where PLAN.md's Railway-specific "done when" criteria (redeploy-preserves-
