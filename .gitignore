@@ -5,3 +5,4 @@ dist-ts/
 *.tsbuildinfo
 /data/
 .DS_Store
+lin_notes.md

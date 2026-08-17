@@ -12,22 +12,31 @@ instances rather than the product owner's real dev server, and committed on the 
 go-ahead to move on — it does **not** carry an explicit manual-browser-pass confirmation the way
 Phases 1-4 do (see §3).
 
-Phase 6 (deploy, durability, backups) is **committed** (`a4185cf`), plus a follow-up pivot on top,
-**uncommitted**: the product owner decided to **self-host for now instead of deploying to Railway**
-(their own machine, reachable only while they're actively hosting a session — not always-on), with
-Railway explicitly kept as the path to switch back to once the game is more mature. The
-dirty-chunk-flush optimization is also being **deliberately skipped**, per the product owner's
-explicit call. Everything achievable without a real Railway account is done and locally verified:
-boot-time writability assertion, `GET /health`, explicit `0.0.0.0` bind, a real `PRAGMA user_version`
-migration runner, a local `VACUUM INTO` backup mechanism with a rehearsed restore, and — the biggest
-find this phase — **a working production run path that didn't exist before** (the server's old
-`dist/index.js` start command pointed at a build that was never actually produced; production now
-runs `tsx` directly like dev does, and the server now serves the client's `vite build` output itself,
-realizing "one same-origin path works in dev and prod" from Phase 0's own stated intent, which had
-never been wired up). This same production path is exactly what self-hosting needs, so the pivot
-required almost no new code — just a small `ALLOWED_ORIGIN` improvement (comma-separated list, so a
-self-hosting owner can allow both `localhost` and their LAN IP at once) and two new docs:
-**[SELF_HOSTING.md](SELF_HOSTING.md)** (current, primary path) and **[DEPLOY.md](DEPLOY.md)** (Railway,
+**Self-hosting is live and confirmed working by the product owner** — not just this session's own
+rehearsal (§2/§4) but real usage: they stood up a Cloudflare quick tunnel, hit some real setup
+friction along the way (documented in §5, all now either fixed or explained), and successfully joined
+their own self-hosted game through the public tunnel URL. Two real bugs surfaced during that live
+usage and are covered in §5: one is root-caused, fixed, and committed (`0692b21`); the other stopped
+reproducing before its root cause was confirmed — flagged, not silently closed out, in case it
+resurfaces. See §6 for what's next.
+
+Phase 6 (deploy, durability, backups — `a4185cf`) and the self-hosting pivot on top of it
+(`cca9685`, `28c1b08`) are both committed. The product owner decided to **self-host for now instead
+of deploying to Railway** (their own machine, exposed via a public tunnel, reachable only while
+they're actively hosting a session — not always-on), with Railway explicitly kept as the path to
+switch back to once the game is more mature. The dirty-chunk-flush optimization is also being
+**deliberately skipped**, per the product owner's explicit call. Everything achievable without a real
+Railway account is done and locally verified: boot-time writability assertion, `GET /health`,
+explicit `0.0.0.0` bind, a real `PRAGMA user_version` migration runner, a local `VACUUM INTO` backup
+mechanism with a rehearsed restore, and — the biggest find in Phase 6 itself — **a working production
+run path that didn't exist before** (the server's old `dist/index.js` start command pointed at a
+build that was never actually produced; production now runs `tsx` directly like dev does, and the
+server now serves the client's `vite build` output itself, realizing "one same-origin path works in
+dev and prod" from Phase 0's own stated intent, which had never been wired up). This same production
+path is exactly what self-hosting needs, so the pivot required almost no new code — just a small
+`ALLOWED_ORIGIN` improvement (comma-separated list) and two new docs:
+**[SELF_HOSTING.md](SELF_HOSTING.md)** (current, primary path, tunnel-based — LAN hosting was
+explicitly removed per product-owner request, see below) and **[DEPLOY.md](DEPLOY.md)** (Railway,
 paused but complete and ready). CLAUDE.md §1/§3/§9 were updated to reflect self-hosting as the current
 mode without losing the Railway path or the long-term always-on intent. See §6.
 
@@ -597,7 +606,64 @@ interactive behavior (§3 Phase 3), the join screen (§3 Phase 4), and the admin
 
 ---
 
-## 5. Known housekeeping items (not blocking, flagged not fixed)
+## 5. Live self-hosting session — bugs found, setup friction, housekeeping
+
+The product owner actually stood up self-hosting for real after Phase 6/the pivot: installed
+`cloudflared`, ran a real quick tunnel, and worked through getting `npm start` configured correctly.
+This surfaced real issues no amount of this session's own scripted testing would have caught, since
+none of it involves a human typing shell commands from documentation for the first time.
+
+### Bugs found during live usage
+
+- **Fixed, committed (`0692b21`): join form gets stuck disabled with no explanation on a
+  transport-level connection failure.** Reported as "nothing happens after I click Join." Root cause:
+  `net.ts` never listened for the WebSocket's native `error` event, and `main.ts`'s `onClose` handler
+  did nothing when the connection closed before a successful join — it only handled failures the
+  server explicitly reported via a JSON error message. If the socket fails at the transport level
+  instead (server not running, tunnel down, a network hiccup mid-handshake), `close` fires with no
+  prior server message, and the join button/input were left disabled with zero feedback. Fixed by
+  having `onClose` reset the form with a generic "Could not connect" message — but **only** when a
+  server-sent error hasn't already explained and reset it moments earlier (a `failureHandled` flag),
+  since the server always closes the socket shortly after sending a real error like "Invalid code,"
+  and without that guard the specific message would get overwritten by the generic one. Verified by
+  full code-path tracing (all four scenarios: successful join, server-rejected join, transport
+  failure, and mid-game disconnect) — **not** verified in an actual browser, since no browser
+  automation was available this session; the product owner's report that they could then join
+  successfully is the only real-world confirmation this has had.
+- **Reported, investigated, not conclusively root-caused: a "pure blue world, no blocks visible" on
+  first login, resolved by closing and reopening in a new tab.** Investigated via full code review of
+  the chunk-loading/meshing pipeline (`main.ts`'s `onWorldState`, `chunkRenderer.ts`'s Web Worker
+  dispatch, `mesh.worker.ts`) — found nothing definitively wrong there, but did notice the first
+  login goes through the **fresh join-code path** while reopening goes through the **stored-session-
+  token resume path**, which pointed toward the connection-close bug above as a plausible (unconfirmed)
+  explanation: a failed reconnect during heavy debugging/restarting could plausibly have looked like
+  "the game loaded but nothing rendered" from the outside. The product owner later reported no longer
+  seeing this, without confirming which hypothesis (if either) was actually the cause — **flagging
+  this as unresolved, not closing it out**, since "stopped reproducing" isn't the same as "explained."
+  If it recurs, the diagnostic steps to ask for are: browser DevTools console errors at the time, and
+  whether an in-tab reload (not a new tab) also fixes it.
+
+### Real setup friction (now reflected in SELF_HOSTING.md, or just worth knowing about)
+
+- **Shell quoting**: argon2 hashes (`ADMIN_PASSWORD_HASH`) are full of literal `$` characters
+  (`$argon2id$v=19$...`). Set unquoted or double-quoted, the shell tries to expand each `$...` as a
+  variable, silently mangling the value (or producing a confusing "command not found" error from the
+  mangled leftovers). Must be single-quoted. This bit the product owner in practice; worth remembering
+  if guiding anyone else through this.
+- **`export` in the wrong terminal tab**: env vars set via `export` only apply to that shell session
+  and its children — a common mistake is exporting in one terminal tab/window and running `npm start`
+  in a different one, where the exports never happened. The most bulletproof pattern is inlining all
+  three vars directly before `npm start` on one line, which sidesteps session-scoping entirely (this
+  is what SELF_HOSTING.md now shows).
+- **Admin login rate limiting during setup debugging**: 5 attempts/15min per IP is easy to burn
+  through while debugging *why* a password isn't working (see shell-quoting above) rather than actual
+  brute-forcing. The limiter is in-memory, so restarting the server clears it instantly — no code
+  change needed, just worth knowing the reset mechanism when it happens.
+- **Quick tunnel URLs are single-use per `cloudflared` process**: restarting the tunnel assigns a
+  *new* random URL. Easy to end up debugging "why won't it connect" when the real issue is a stale
+  URL from a previous tunnel run. Worth checking early when something that worked stops working.
+
+### Other housekeeping (not blocking, flagged not fixed)
 
 - **`school map.png` and `.DS_Store`** are still present in git history from before this session
   (an earlier commit added them before PLAN.md's decision D3 said to keep the map out of git). The
@@ -608,38 +674,41 @@ interactive behavior (§3 Phase 3), the join screen (§3 Phase 4), and the admin
   scripts) are advisory-only in this environment — verified the actual native binaries build and load
   correctly (`better-sqlite3` opens/queries fine, `esbuild`/Vite run fine). Don't spend time chasing
   these unless something actually breaks.
+- **`lin_notes.md`** exists in the repo root — the product owner's own working notes, appears to
+  include at least one real join code. Added to `.gitignore` this session (it wasn't before) so it
+  can't get swept into a commit by an unrelated `git add -A`-style mistake. Its contents are still
+  left alone deliberately; not something to ever read/stage/commit beyond that gitignore entry
+  without being asked.
 
 ---
 
-## 6. Next up: try self-hosting a real session
+## 6. Next up
 
-Hosting mode is now **self-hosted, deliberately** (superseding the earlier "Railway confirmed" —
-see the pivot above), and **the dirty-chunk-flush optimization (PLAN.md C6) is being skipped**
+Hosting mode is **self-hosted, deliberately**, and **confirmed working end-to-end by the product
+owner themselves** — real `cloudflared` tunnel, real browser, real successful join, not just this
+session's scripted rehearsal. The dirty-chunk-flush optimization (PLAN.md C6) is being **skipped**
 deliberately too (pure write-through already makes every change durable immediately, satisfying
 Phase 6's actual correctness "done when" criterion, and this project's ≤5-player scale is unlikely to
 need the write-amplification optimization that buffer would trade simplicity away for).
 
-The tunnel-based flow itself (§2 above) was already rehearsed end-to-end for real this session — a
-genuine `cloudflared` quick tunnel, a real public `trycloudflare.com` URL, WSS connect + join + chat
-all confirmed working through it, not simulated. What's left is trying it with **real people**: follow
-[SELF_HOSTING.md](SELF_HOSTING.md) §3 on the machine that'll host, and have an actual second person
-join from their own device over the internet (not this session's own scripted client) — the mechanics
-are proven, but nobody's played through a real tunnel session yet.
+**Watch for recurrence of the unresolved "blank blue world" bug** (§5) — it stopped reproducing but
+was never conclusively root-caused. If it comes back, get browser console errors and whether an
+in-tab reload (not a new tab) also fixes it; that'll narrow it down fast.
 
-Whenever always-on hosting is wanted again: [DEPLOY.md](DEPLOY.md) is complete and ready, and its own
-§6-equivalent (its post-deploy checklist) is where PLAN.md's Railway-specific "done when" criteria
-(redeploy-preserves-data canary, WSS through Railway's proxy) would finally get checked for the first
-time against a real deployment — nothing currently verifies those specifically, since self-hosting
-doesn't need Railway's redeploy/proxy behavior at all.
-
-Two things worth doing before real kids ever get a code, independent of the above:
+Two things worth doing before real kids ever get a code:
 - **Seed `chatFilter.ts`'s `WHITELIST`** with real children's names and school-specific vocabulary
   once real codes exist — it's still empty; PLAN.md flags this as a critical pre-launch step.
-- **Set real, distinct secrets** (`JOIN_CODE_PEPPER`, `ADMIN_PASSWORD_HASH`) before any deployment a
-  real child or the public internet could reach — every environment currently falls back to the same
-  hardcoded insecure pepper if unset, and the admin panel is simply unreachable without the password
-  hash set (safe-by-default, but worth confirming deliberately rather than discovering it locked out).
+- **Confirm `JOIN_CODE_PEPPER` and `ADMIN_PASSWORD_HASH` are real, distinct secrets** (not left over
+  from any of this session's testing/debugging) before any child actually gets a code — every
+  environment falls back to a hardcoded insecure pepper if unset, and the admin panel is simply
+  unreachable without the password hash set.
 
 Also still open from Phase 5: the admin **page** itself (as opposed to the actions it drives, which
 are scripted-verified) hasn't had an explicit manual-browser confirmation — §3's checklist is there
 whenever that happens.
+
+Whenever always-on hosting is wanted again: [DEPLOY.md](DEPLOY.md) is complete and ready, and its own
+post-deploy checklist is where PLAN.md's Railway-specific "done when" criteria (redeploy-preserves-
+data canary, WSS through Railway's proxy) would finally get checked for the first time against a real
+deployment — nothing currently verifies those specifically, since self-hosting doesn't need Railway's
+redeploy/proxy behavior at all.
