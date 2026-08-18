@@ -6,6 +6,8 @@ import { ChunkRenderer } from './chunkRenderer.js';
 import { PlayerController } from './controls.js';
 import { raycastVoxel } from './raycast.js';
 import { RemotePlayers } from './remotePlayers.js';
+import { loadBlockTextureArray } from './textures.js';
+import { LIGHT_COLOR, AMBIENT_INTENSITY, SUN_INTENSITY, SUN_POSITION } from './blockMaterial.js';
 
 const SESSION_TOKEN_KEY = 'sessionToken';
 
@@ -76,13 +78,14 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-sun.position.set(50, 100, 25);
+scene.add(new THREE.AmbientLight(LIGHT_COLOR, AMBIENT_INTENSITY));
+const sun = new THREE.DirectionalLight(LIGHT_COLOR, SUN_INTENSITY);
+sun.position.copy(SUN_POSITION);
 scene.add(sun);
 
 const world = new ClientWorld();
-const chunkRenderer = new ChunkRenderer(scene);
+const blockTextureArray = await loadBlockTextureArray();
+const chunkRenderer = new ChunkRenderer(scene, blockTextureArray);
 const controller = new PlayerController(renderer.domElement, camera, world);
 const remotePlayers = new RemotePlayers(scene);
 

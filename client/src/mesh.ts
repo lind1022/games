@@ -16,7 +16,16 @@ import { CHUNK_SIZE, WORLD_HEIGHT, isSolid, voxelIndex } from '@game/shared';
 export interface ChunkMeshData {
   positions: Float32Array;
   normals: Float32Array;
-  colors: Float32Array;
+  /**
+   * Spans [0,w]x[0,h] (block units) per merged quad, not [0,1] — the
+   * fragment shader tiles the texture within each block unit via
+   * `fract()`, so a quad merged from w x h blocks (PLAN.md C3's greedy
+   * meshing) repeats the texture w x h times instead of stretching one
+   * copy across the whole merged quad.
+   */
+  uvs: Float32Array;
+  /** One texture-array layer index per vertex (see blockLayer.ts) — constant across each quad. */
+  layers: Float32Array;
   indices: Uint32Array;
 }
 
@@ -31,11 +40,12 @@ function getBlockAt(blocks: Uint8Array, x: number, y: number, z: number): number
 
 export function meshChunk(
   blocks: Uint8Array,
-  blockColor: (blockId: number) => readonly [number, number, number]
+  blockLayer: (blockId: number) => number
 ): ChunkMeshData {
   const positions: number[] = [];
   const normals: number[] = [];
-  const colors: number[] = [];
+  const uvs: number[] = [];
+  const layers: number[] = [];
   const indices: number[] = [];
 
   for (let d = 0; d < 3; d++) {
@@ -118,15 +128,24 @@ export function meshChunk(
 
           // dir>0: p0->p1->p2->p3 is CCW as seen from +d (cross(du,dv) == +d
           // for this cyclic u,v choice). dir<0 reverses the winding to stay
-          // CCW as seen from -d.
+          // CCW as seen from -d. UVs are permuted the same way to keep each
+          // one matched to its corresponding position.
+          const uv0 = [0, 0];
+          const uv1 = [w, 0];
+          const uv2 = [w, h];
+          const uv3 = [0, h];
           const quad = dir > 0 ? [p0, p1, p2, p3] : [p0, p3, p2, p1];
-          const [r, g, b] = blockColor(blockId);
+          const quadUv = dir > 0 ? [uv0, uv1, uv2, uv3] : [uv0, uv3, uv2, uv1];
+          const layer = blockLayer(blockId);
           const vertexStart = positions.length / 3;
 
-          for (const p of quad) {
+          for (let vi = 0; vi < quad.length; vi++) {
+            const p = quad[vi]!;
+            const uv = quadUv[vi]!;
             positions.push(p[0]!, p[1]!, p[2]!);
             normals.push(normal[0]!, normal[1]!, normal[2]!);
-            colors.push(r, g, b);
+            uvs.push(uv[0]!, uv[1]!);
+            layers.push(layer);
           }
           indices.push(
             vertexStart,
@@ -153,7 +172,8 @@ export function meshChunk(
   return {
     positions: new Float32Array(positions),
     normals: new Float32Array(normals),
-    colors: new Float32Array(colors),
+    uvs: new Float32Array(uvs),
+    layers: new Float32Array(layers),
     indices: new Uint32Array(indices),
   };
 }

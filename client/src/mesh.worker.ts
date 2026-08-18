@@ -1,5 +1,5 @@
 import { meshChunk } from './mesh.js';
-import { blockColor } from './colors.js';
+import { blockLayer } from './blockLayer.js';
 
 /**
  * Web Worker wrapper around the pure `meshChunk` function (PLAN.md C3 / Phase 2:
@@ -25,7 +25,8 @@ interface MeshResponse {
   version: number;
   positions: Float32Array;
   normals: Float32Array;
-  colors: Float32Array;
+  uvs: Float32Array;
+  layers: Float32Array;
   indices: Uint32Array;
 }
 
@@ -38,9 +39,9 @@ const scope = self as unknown as WorkerScope;
 
 scope.onmessage = (event) => {
   const { chunkX, chunkZ, version, blocks } = event.data;
-  const mesh = meshChunk(blocks, blockColor);
+  const mesh = meshChunk(blocks, blockLayer);
   scope.postMessage(
     { chunkX, chunkZ, version, ...mesh },
-    [mesh.positions.buffer, mesh.normals.buffer, mesh.colors.buffer, mesh.indices.buffer]
+    [mesh.positions.buffer, mesh.normals.buffer, mesh.uvs.buffer, mesh.layers.buffer, mesh.indices.buffer]
   );
 };

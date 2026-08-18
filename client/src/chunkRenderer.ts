@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { CHUNK_SIZE } from '@game/shared';
-
-const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+import { createBlockMaterial } from './blockMaterial.js';
 
 function chunkKey(chunkX: number, chunkZ: number): string {
   return `${chunkX},${chunkZ}`;
@@ -13,7 +12,8 @@ interface MeshResult {
   version: number;
   positions: Float32Array;
   normals: Float32Array;
-  colors: Float32Array;
+  uvs: Float32Array;
+  layers: Float32Array;
   indices: Uint32Array;
 }
 
@@ -29,8 +29,13 @@ export class ChunkRenderer {
   private readonly meshes = new Map<string, THREE.Mesh>();
   private readonly latestVersion = new Map<string, number>();
   private readonly worker: Worker;
+  private readonly material: THREE.RawShaderMaterial;
 
-  constructor(private readonly scene: THREE.Scene) {
+  constructor(
+    private readonly scene: THREE.Scene,
+    blockTextureArray: THREE.DataArrayTexture
+  ) {
+    this.material = createBlockMaterial(blockTextureArray);
     this.worker = new Worker(new URL('./mesh.worker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<MeshResult>) => this.applyResult(event.data);
   }
@@ -53,7 +58,7 @@ export class ChunkRenderer {
 
     let mesh = this.meshes.get(key);
     if (!mesh) {
-      mesh = new THREE.Mesh(new THREE.BufferGeometry(), material);
+      mesh = new THREE.Mesh(new THREE.BufferGeometry(), this.material);
       mesh.position.set(result.chunkX * CHUNK_SIZE, 0, result.chunkZ * CHUNK_SIZE);
       this.scene.add(mesh);
       this.meshes.set(key, mesh);
@@ -65,12 +70,14 @@ export class ChunkRenderer {
     const geometry = mesh.geometry;
     geometry.setAttribute('position', new THREE.BufferAttribute(result.positions, 3));
     geometry.setAttribute('normal', new THREE.BufferAttribute(result.normals, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(result.colors, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(result.uvs, 2));
+    geometry.setAttribute('layer', new THREE.BufferAttribute(result.layers, 1));
     geometry.setIndex(new THREE.BufferAttribute(result.indices, 1));
     geometry.computeBoundingSphere();
   }
 
   dispose(): void {
     this.worker.terminate();
+    this.material.dispose();
   }
 }
