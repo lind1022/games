@@ -3,14 +3,16 @@
 Working plan for the voxel school game specified in [CLAUDE.md](CLAUDE.md). CLAUDE.md is the
 durable **spec** (what and why); this file is the **build order** (in what sequence, done when).
 
-> **Status (updated 2026-08-17):** Phases 0-6 built and committed — see [HANDOFF.md](HANDOFF.md) for
+> **Status (updated 2026-08-17):** Phases 0-7 built and committed — see [HANDOFF.md](HANDOFF.md) for
 > current detail. Hosting is currently **self-hosted** (a deliberate, revisitable choice; see
 > CLAUDE.md §1/§3), not the Railway Hobby plan this file originally assumed — Railway remains ready
-> to switch back to via [DEPLOY.md](DEPLOY.md). **Phase 7 (school map importer) is next and is now
-> unblocked**: all three blocking questions in §8 are answered (D4-D6, confirmed 2026-08-17).
+> to switch back to via [DEPLOY.md](DEPLOY.md). **Phase 7 (school map importer) is done** — the real
+> campus loads now, not the flat test world. **Phase 8 (performance & polish) is next**, not started;
+> its texture-atlas work assumes real texture image assets that don't exist in this repo yet — confirm
+> that before diving in, the rest of Phase 8 doesn't depend on it.
 >
 > **Living document.** Tick items off, revise estimates, and fold decisions back into CLAUDE.md as
-> they're confirmed. Phases 7–8 will need revisiting once the importer meets the real map.
+> they're confirmed.
 
 ---
 
@@ -453,7 +455,11 @@ archive older rows to gzipped NDJSON off-box, then delete — `block_changes` is
 
 ## 9. Suggested next step
 
-**Phase 7 (school map importer) is next, and nothing blocks starting it.** Phases 0-6 are done (see
-HANDOFF.md); §8's D4-D6 close out the three questions that were blocking Phase 7. Remaining
-open items (§8 "before launch" / "can default") don't gate Phase 7 — they matter before real kids get
-codes (already partly addressed, see HANDOFF.md §6), not before the importer can be built.
+**Phase 7 is done** (see HANDOFF.md's own Phase 7 section for the full story). **Phase 8 (performance
+& polish) is next**, but unlike Phase 7 it has a real blocking question worth raising before starting,
+not guessing past: its texture-atlas task assumes real texture image assets, and none exist in this
+repo — the game has been flat-vertex-color-only (`client/src/colors.ts`) through Phase 7 by design.
+Confirm whether real textures are coming, or whether Phase 8 should proceed vertex-color-only and drop
+that one task, before starting. The rest of Phase 8 (the C4 whole-world-load spike now that the real
+world exists to spike against, geometry disposal on remesh/unload, glass's transparent second mesh
+pass, hotbar/name-tag polish) doesn't depend on that answer and could start independently.

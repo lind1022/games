@@ -5,13 +5,17 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-17:** Phases 0-6 are committed and pushed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`,
-`f3e4edc`, `c6449b0`, `a4185cf`). Phase 5 (admin panel, plus a Reissue action and a raised chat-log
-display cap added after initial review) was originally scripted-end-to-end-tested against throwaway
-server instances only, and committed on the product owner's go-ahead to move on without the explicit
-manual-browser-pass confirmation Phases 1-4 carry — **that gap is now closed** (see §3): the product
-owner walked the full checklist against another throwaway instance and confirmed everything works,
-no issues found.
+**As of 2026-08-17:** Phases 0-7 are committed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`, `f3e4edc`,
+`c6449b0`, `a4185cf`, `19eaa72`). **Phase 7 is the headline change**: the flat 5x5 test world is gone —
+the server now loads and spawns into the real, imported Pinehurst campus (`19eaa72`; see its own section
+under §2 and the commit message for the full engineering story). Confirmed working by the product owner
+walking the real world in a browser, not just this session's own scripted verification.
+
+Phase 5 (admin panel, plus a Reissue action and a raised chat-log display cap added after initial
+review) was originally scripted-end-to-end-tested against throwaway server instances only, and
+committed on the product owner's go-ahead to move on without the explicit manual-browser-pass
+confirmation Phases 1-4 carry — **that gap is now closed too** (see §3): the product owner walked the
+full checklist against another throwaway instance and confirmed everything works, no issues found.
 
 Two more things landed since: `chatFilter.ts`'s `WHITELIST` is seeded with real names/school
 vocabulary and `JOIN_CODE_PEPPER`/`ADMIN_PASSWORD_HASH` were verified as real, never-leaked secrets
@@ -402,6 +406,44 @@ the same transparency this file has applied to test mistakes throughout the sess
   choice, rather than overwriting one with the other — the top-of-file Status line (stale since
   before Phase 0, still saying "Greenfield / pre-code") was also fixed while touching this file.
 
+### Phase 7 — school map importer (committed: `19eaa72`)
+Replaces the flat 5x5 test world with the real Pinehurst campus, per PLAN.md's build order and D4-D6
+(§8, confirmed 2026-08-17 — see `8b4eda6`). Full engineering story, including every real bug found and
+fixed along the way (pond/grey hue confusion, a wrong outline color assumed from the wrong histogram
+entry, overlay arrows/text erasing real walls in the flattened PNG, the tennis facility's own red
+border almost becoming a false building), is in the `19eaa72` commit message rather than duplicated
+here — read that first if picking this back up.
+
+Headline results:
+- `/tools` (separate package, `sharp` kept out of the server's dependency graph) now has a working
+  classify → downsample → extrude → diff-PNG → (optional `--write`) pipeline.
+- **3.23% of blocks are unclassified** (flagged magenta in the diff-PNG), concentrated in one known,
+  deliberately-accepted gap in the GYM/Library complex (closing it via more aggressive gap-dilation was
+  confirmed to falsely enclose Field 1 and the tennis courts instead — see the commit message's
+  `DILATE_ITERATIONS` reasoning) plus scattered tree/hatching residue elsewhere.
+- Two new core block types: `LEAVES`, `COURT` (append-only per contract #1) — plus client vertex colors
+  for both and for `WATER`, which the importer is what first makes appear in-world at all.
+- `server/src/world.ts` `WORLD_CHUNKS` (5 → 23) and `index.ts` `SPAWN` (was `WORLD_SIZE/2`, now the
+  importer's own computed open-ground point, `(181, 98)`) are wired to actually load and spawn into the
+  real world — the real site is a rectangle placed at the (0,0) chunk corner of a 23x23 square (contract
+  #4 needs one scalar `worldSize`), padded with flat grass, no format change needed.
+- **Verified two ways**, never against the real dev DB: a scripted WS join + `world-state` round-trip
+  against a throwaway `DATA_DIR` confirmed all 529 written chunks arrive and decode to a real mix of
+  grass/brick/stone/path/water/court block ids (not just flat grass); the product owner then walked the
+  real world in a browser (aided by a temporary, since-fully-reverted fly-mode addition to
+  `client/src/controls.ts` for an aerial check — confirmed clean via `git diff` showing zero changes
+  after reverting) and confirmed the layout looks right.
+- The `import-config.json` palette/seed/blocker config and every fix are all real, committed source —
+  nothing here was thrown away the way this session's many one-off pixel-sampling/debug scripts were
+  (only `tools/src/sampleColors.ts` was kept, as a genuinely reusable calibration aid for if the map
+  changes).
+
+Not done in Phase 7, deliberately out of scope: closing the GYM/Library gap further (see above); tree
+placement or hatching-specific cleanup (PLAN.md's own task list frames both as noise to wash out via
+downsampling, not features to place — and majority-vote downsampling does that on its own); re-running
+against production data (never attempted — this was built and verified entirely against throwaway
+instances).
+
 ---
 
 ## 3. Browser verification
@@ -707,17 +749,20 @@ deliberately too (pure write-through already makes every change durable immediat
 Phase 6's actual correctness "done when" criterion, and this project's ≤5-player scale is unlikely to
 need the write-amplification optimization that buffer would trade simplicity away for).
 
-**Phase 7 (school map importer) is next per PLAN.md's build order, and is now unblocked.** It had been
-sitting untouched since Phase 6, and — a real gap — this file didn't say so until the product owner
-asked why. PLAN.md §8's three blocking questions are now answered (D4-D6, `8b4eda6`): no building's
-upper floors matter; nothing needs excluding beyond the event-overlay layer already planned for
-stripping (plus two classification details: Field 1/2/3 have soccer goals, and the P-numbered pods are
-primary classrooms); and the scale-anchor courts are **6 tennis courts (A-F), not netball** as this
-project's own earlier map inspection had guessed — corrected before it could mis-scale the whole
-import. One loose end for whoever builds Phase 7: PLAN.md's original inspection read the pod count as
-P1–P23, the product owner recalls P1–P22 — recount against the actual image before hardcoding either.
-Phase 7 itself (the importer: `sharp` decode, palette classification, diff-PNG review — see PLAN.md
-Phase 7 for the full task list) has **not been started**.
+**Phase 7 (school map importer) is done** (`19eaa72` — see its own section under §2 for the full story).
+The real campus is what loads now, not the flat test world; `WORLD_CHUNKS`/`SPAWN` are wired to it.
+**Phase 8 (performance & polish) is next per PLAN.md's build order** — not started. Worth flagging
+before diving in, unlike Phase 7 which only needed the map image: PLAN.md's Phase 8 task list assumes
+**real texture image assets** for the "texture atlas" work, and none exist in this repo — the game is
+currently flat-vertex-color-only (`client/src/colors.ts`), by design through Phase 7. That's a real
+open question to raise with the product owner before starting, not something to guess past. The other
+Phase 8 items (the C4 whole-world-load spike, geometry disposal on remesh/unload, glass's transparent
+second mesh pass) don't have that dependency and could start independently.
+
+One loose end from Phase 7 worth remembering if picking that back up specifically: PLAN.md's original
+map inspection read the pod count as P1–P23, the product owner recalled P1–P22 — never actually
+recounted against the pixels (the importer doesn't hardcode a pod count anywhere, so this didn't block
+Phase 7, but it's still an open factual question if it ever matters for something else).
 
 **Watch for recurrence of the unresolved "blank blue world" bug** (§5) — it stopped reproducing but
 was never conclusively root-caused. If it comes back, get browser console errors and whether an
