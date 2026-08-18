@@ -5,11 +5,14 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-17:** Phases 0-7 are committed (`447d25e`, `66b689f`, `98a9cb6`, `4b455ee`, `f3e4edc`,
-`c6449b0`, `a4185cf`, `19eaa72`). **Phase 7 is the headline change**: the flat 5x5 test world is gone —
-the server now loads and spawns into the real, imported Pinehurst campus (`19eaa72`; see its own section
-under §2 and the commit message for the full engineering story). Confirmed working by the product owner
-walking the real world in a browser, not just this session's own scripted verification.
+**As of 2026-08-18:** Phases 0-7 are committed, plus one Phase 8 task (`447d25e`, `66b689f`, `98a9cb6`,
+`4b455ee`, `f3e4edc`, `c6449b0`, `a4185cf`, `19eaa72`, `6b08610`). **Phase 7 is the headline change**:
+the flat 5x5 test world is gone — the server now loads and spawns into the real, imported Pinehurst
+campus (`19eaa72`; see its own section under §2 and the commit message for the full engineering story).
+**Real block textures landed right after** (`6b08610`, also under §2) — flat vertex colors are gone,
+replaced by a `DataArrayTexture` built from a texture sheet the product owner supplied. Both confirmed
+working by the product owner directly in a browser, not just this session's own scripted verification —
+this session has no WebGL rendering capability of its own to check either with.
 
 Phase 5 (admin panel, plus a Reissue action and a raised chat-log display cap added after initial
 review) was originally scripted-end-to-end-tested against throwaway server instances only, and
@@ -444,6 +447,38 @@ downsampling, not features to place — and majority-vote downsampling does that
 against production data (never attempted — this was built and verified entirely against throwaway
 instances).
 
+### Phase 8 (partial) — real block textures (committed: `6b08610`)
+Only the texture-atlas task from Phase 8's list, not the rest of the phase (§6 covers what's still
+open). The product owner supplied a stock pixel-art texture sheet and delegated tile-to-material
+choices ("use your own judgement"); `tools/src/buildTextureArray.ts` crops the 10 tiles this project's
+block types need into `client/public/textures/blocks.png`.
+
+Resolves PLAN.md's own flagged §5 spike question (padded atlas vs `DataArrayTexture`) in favor of the
+latter, for a real reason rather than convenience: greedy-merged quads (PLAN.md C3) need their texture
+to *tile* across the merged span, not stretch one copy across it, and a shared atlas tiled via UV
+repeat would sample past a tile's edges into whatever neighbors it at the atlas level — exactly the
+bleeding problem padding/inset exists to paper over. An array texture sidesteps it instead: each layer
+is independent, so repeating within one can never reach a different block's tile.
+
+Real engineering, not just an image drop-in — full detail in the `6b08610` commit message: `mesh.ts`
+now emits per-vertex UVs spanning `[0,w]x[0,h]` (block units) instead of flat colors, tiled via
+`fract()`; `blockMaterial.ts` (new) is a hand-rolled `RawShaderMaterial` (GLSL3, `sampler2DArray`) since
+nothing built into three.js samples an array texture through the standard material pipeline, with
+lighting constants shared with main.ts's actual scene lights so they can't drift apart; `vite.config.ts`
+needed its build target bumped to es2022 for the top-level `await` loading the texture before first
+render. `client/src/colors.ts` is gone, replaced by `blockLayer.ts`.
+
+Verified two ways: a scripted WS check confirmed the mesh-data pipeline against a throwaway instance
+seeded with the real Phase 7 campus (deliberately, not the tiny 5x5 test world — real fields/courts
+stress-test large-quad tiling, 3x3 towers don't); the product owner then confirmed in a browser —
+the one thing this session had no way to check itself, no WebGL rendering capability — that textures
+render, tile in a repeating grid on large flat areas rather than stretching, and walls/floors look
+reasonable.
+
+The source stock sheet is a third-party asset, kept out of git like `school map.png` (added to
+`.gitignore`) — re-running the build script needs it present locally first, licensing terms unverified
+by this session (the product owner sourced and supplied it).
+
 ---
 
 ## 3. Browser verification
@@ -751,13 +786,14 @@ need the write-amplification optimization that buffer would trade simplicity awa
 
 **Phase 7 (school map importer) is done** (`19eaa72` — see its own section under §2 for the full story).
 The real campus is what loads now, not the flat test world; `WORLD_CHUNKS`/`SPAWN` are wired to it.
-**Phase 8 (performance & polish) is next per PLAN.md's build order** — not started. Worth flagging
-before diving in, unlike Phase 7 which only needed the map image: PLAN.md's Phase 8 task list assumes
-**real texture image assets** for the "texture atlas" work, and none exist in this repo — the game is
-currently flat-vertex-color-only (`client/src/colors.ts`), by design through Phase 7. That's a real
-open question to raise with the product owner before starting, not something to guess past. The other
-Phase 8 items (the C4 whole-world-load spike, geometry disposal on remesh/unload, glass's transparent
-second mesh pass) don't have that dependency and could start independently.
+
+**Phase 8 (performance & polish) is in progress — only its texture-atlas task is done** (`6b08610`, see
+§2). Real block textures (a `DataArrayTexture`, not flat vertex colors) replaced `client/src/colors.ts`;
+the product owner supplied the source texture sheet and confirmed the result in a browser. **Still open
+in Phase 8**, none started: the C4 whole-world-load spike (now genuinely possible to run — the real
+imported world exists to spike against, unlike when C4 was originally deferred), geometry disposal on
+remesh/unload, glass's transparent second mesh pass (glass has a texture now but no real alpha-blending
+logic — a `GLASS` block currently renders opaque), and hotbar/name-tag polish.
 
 One loose end from Phase 7 worth remembering if picking that back up specifically: PLAN.md's original
 map inspection read the pod count as P1–P23, the product owner recalled P1–P22 — never actually

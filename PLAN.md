@@ -3,13 +3,14 @@
 Working plan for the voxel school game specified in [CLAUDE.md](CLAUDE.md). CLAUDE.md is the
 durable **spec** (what and why); this file is the **build order** (in what sequence, done when).
 
-> **Status (updated 2026-08-17):** Phases 0-7 built and committed — see [HANDOFF.md](HANDOFF.md) for
+> **Status (updated 2026-08-18):** Phases 0-7 built and committed — see [HANDOFF.md](HANDOFF.md) for
 > current detail. Hosting is currently **self-hosted** (a deliberate, revisitable choice; see
 > CLAUDE.md §1/§3), not the Railway Hobby plan this file originally assumed — Railway remains ready
 > to switch back to via [DEPLOY.md](DEPLOY.md). **Phase 7 (school map importer) is done** — the real
-> campus loads now, not the flat test world. **Phase 8 (performance & polish) is next**, not started;
-> its texture-atlas work assumes real texture image assets that don't exist in this repo yet — confirm
-> that before diving in, the rest of Phase 8 doesn't depend on it.
+> campus loads now, not the flat test world. **Phase 8 (performance & polish) is in progress**: its
+> texture-atlas task is done (real block textures via a `DataArrayTexture`, from a sheet the product
+> owner supplied); the rest — the C4 whole-world-load spike, geometry disposal on remesh/unload, glass
+> transparency, hotbar/name-tag polish — is not started.
 >
 > **Living document.** Tick items off, revise estimates, and fold decisions back into CLAUDE.md as
 > they're confirmed.
@@ -455,11 +456,11 @@ archive older rows to gzipped NDJSON off-box, then delete — `block_changes` is
 
 ## 9. Suggested next step
 
-**Phase 7 is done** (see HANDOFF.md's own Phase 7 section for the full story). **Phase 8 (performance
-& polish) is next**, but unlike Phase 7 it has a real blocking question worth raising before starting,
-not guessing past: its texture-atlas task assumes real texture image assets, and none exist in this
-repo — the game has been flat-vertex-color-only (`client/src/colors.ts`) through Phase 7 by design.
-Confirm whether real textures are coming, or whether Phase 8 should proceed vertex-color-only and drop
-that one task, before starting. The rest of Phase 8 (the C4 whole-world-load spike now that the real
-world exists to spike against, geometry disposal on remesh/unload, glass's transparent second mesh
-pass, hotbar/name-tag polish) doesn't depend on that answer and could start independently.
+**Phase 7 is done** (see HANDOFF.md's own Phase 7 section for the full story). **Phase 8 (performance &
+polish) is in progress**: the texture-atlas task is done — the product owner supplied a texture sheet,
+and real block textures (a `DataArrayTexture`, replacing flat vertex colors) are in via `6b08610`, with
+`client/src/colors.ts` gone. **Still open, not started**: the C4 whole-world-load spike (now genuinely
+runnable — the real imported world exists to spike against), geometry disposal on remesh/unload,
+glass's transparent second mesh pass (glass has a texture now but renders opaque — no alpha-blending
+logic exists yet), and hotbar/name-tag polish. None of these have an open question blocking them the
+way texturing did.
