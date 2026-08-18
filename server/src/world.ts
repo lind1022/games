@@ -9,8 +9,22 @@ import {
 } from '@game/shared';
 import type { GameDb } from './db.js';
 
-/** Flat 5x5-chunk grass test world (Phase 1) — the real school import lands in Phase 7. */
-export const WORLD_CHUNKS = 5;
+/**
+ * World square side length, in chunks. Contract #4 requires a single scalar
+ * worldSize (x, z both in [0, worldSize)) — the real campus imported in
+ * Phase 7 is a ~1.67:1 rectangle, not square, so the importer places it at
+ * the (0,0) corner of this square and pads the rest with flat grass rather
+ * than needing a format change here. 23 covers the real imported world
+ * (362x196 blocks — see /tools/import-config.json and diff.png) with
+ * headroom; if the map or its calibration changes, re-run the importer and
+ * update this to whatever it reports as `world: NxN chunks`.
+ *
+ * `generateFlatChunk`/`testLandmarks` below remain as the fallback for any
+ * chunk in range the DB doesn't already have a row for (e.g. a fresh/empty
+ * DATA_DIR) — normal operation after a real `--write` import doesn't hit
+ * that path, since the importer writes every chunk in range itself.
+ */
+export const WORLD_CHUNKS = 23;
 export const WORLD_SIZE = WORLD_CHUNKS * CHUNK_SIZE;
 
 interface Landmark {

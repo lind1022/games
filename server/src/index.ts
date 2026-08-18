@@ -76,7 +76,13 @@ assertDataDirWritable(DATA_DIR);
 const db = new GameDb(DB_PATH);
 const world = new World(db);
 
-const SPAWN = { x: WORLD_SIZE / 2, y: 1, z: WORLD_SIZE / 2 };
+// (181, 98) is the real imported campus's spawn point (tools/importMap.ts's
+// own centre-of-imported-area-nudged-to-open-ground search — see its
+// console output / worldGrid.ts's findSpawn) — not WORLD_SIZE/2, which
+// would land in the flat-grass padding around the real (non-square)
+// imported rectangle rather than inside the actual campus. Re-run the
+// importer and update this if the map or its calibration changes.
+const SPAWN = { x: 181, y: 1, z: 98 };
 
 // Loose movement sanity checks only (PLAN.md Phase 2) — there's no client
 // prediction to reconcile against, and a school wifi hiccup produces the

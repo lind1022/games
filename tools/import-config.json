@@ -1,0 +1,45 @@
+{
+  "pixelsPerMetre": 5.66,
+  "wallHeight": 5,
+  "ignoreRegions": [
+    { "name": "titleText", "x0": 0, "y0": 0, "x1": 550, "y1": 300 }
+  ],
+  "outline": {
+    "maxBrightness": 145,
+    "maxChannelSpread": 15,
+    "additionalBlockerColors": [
+      { "name": "eventArrowBlue", "color": [6, 69, 246], "tolerance": 60 },
+      {
+        "name": "eventTextRed",
+        "color": [255, 0, 0],
+        "tolerance": 90,
+        "maxComponentSize": 1500
+      }
+    ]
+  },
+  "palette": [
+    {
+      "name": "pond",
+      "color": [224, 240, 240],
+      "tolerance": 24,
+      "minCyanHueOffset": 8,
+      "block": "WATER"
+    },
+    { "name": "tennisTurf", "color": [0, 152, 0], "tolerance": 90, "block": "COURT" },
+    { "name": "tennisCourtLine", "color": [0, 0, 255], "tolerance": 120, "block": "COURT" },
+    { "name": "field3", "color": [224, 232, 200], "tolerance": 20, "block": "GRASS" },
+    {
+      "name": "hardscapeGrey",
+      "neutralGrey": true,
+      "minBrightness": 170,
+      "maxBrightness": 249,
+      "maxChannelSpread": 8,
+      "block": "PATH"
+    },
+    { "name": "background", "color": [255, 255, 255], "tolerance": 5, "block": "GRASS" }
+  ],
+  "seedRegions": [
+    { "name": "Field1", "seed": [1324, 470], "block": "GRASS" },
+    { "name": "Field2", "seed": [1720, 430], "block": "GRASS" }
+  ]
+}

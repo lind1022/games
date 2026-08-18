@@ -8,6 +8,9 @@ const COLORS: Partial<Record<number, readonly [number, number, number]>> = {
   [BLOCKS.BRICK.id]: [0.65, 0.29, 0.24],
   [BLOCKS.WOOD.id]: [0.55, 0.4, 0.24],
   [BLOCKS.PATH.id]: [0.72, 0.66, 0.55],
+  [BLOCKS.WATER.id]: [0.2, 0.45, 0.75],
+  [BLOCKS.LEAVES.id]: [0.18, 0.5, 0.2],
+  [BLOCKS.COURT.id]: [0.2, 0.55, 0.5],
 };
 
 const FALLBACK_COLOR = [1, 0, 1] as const; // magenta = "no color defined" (debug aid)

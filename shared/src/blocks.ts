@@ -35,6 +35,8 @@ export const BLOCKS = {
   WOOD: defineBlock(6, 'wood', 'wood', true, false),
   PATH: defineBlock(7, 'path', 'path', true, false),
   WATER: defineBlock(8, 'water', 'water', false, true),
+  LEAVES: defineBlock(9, 'leaves', 'leaves', true, true),
+  COURT: defineBlock(10, 'court', 'court', true, false),
 } as const satisfies Record<string, BlockDef>;
 
 export type BlockName = keyof typeof BLOCKS;
