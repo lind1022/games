@@ -31,7 +31,11 @@ export const BLOCKS = {
   DIRT: defineBlock(2, 'dirt', 'dirt', true, false),
   STONE: defineBlock(3, 'stone', 'stone', true, false),
   BRICK: defineBlock(4, 'brick', 'brick', true, false),
-  GLASS: defineBlock(5, 'glass', 'glass', true, true),
+  // Its texture reads as a snow-capped surface, not glass — kept the name
+  // (a rename touches persisted chunk data semantics, not asked for) but
+  // it renders fully opaque now, product owner's call after seeing it in
+  // practice: solid:true was already right, transparent:true wasn't.
+  GLASS: defineBlock(5, 'glass', 'glass', true, false),
   WOOD: defineBlock(6, 'wood', 'wood', true, false),
   PATH: defineBlock(7, 'path', 'path', true, false),
   WATER: defineBlock(8, 'water', 'water', false, true),

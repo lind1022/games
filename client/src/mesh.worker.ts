@@ -1,4 +1,4 @@
-import { meshChunk } from './mesh.js';
+import { meshChunk, type ChunkMeshData } from './mesh.js';
 import { blockLayer } from './blockLayer.js';
 
 /**
@@ -23,11 +23,8 @@ interface MeshResponse {
   chunkX: number;
   chunkZ: number;
   version: number;
-  positions: Float32Array;
-  normals: Float32Array;
-  uvs: Float32Array;
-  layers: Float32Array;
-  indices: Uint32Array;
+  opaque: ChunkMeshData;
+  transparent: ChunkMeshData;
 }
 
 interface WorkerScope {
@@ -37,11 +34,15 @@ interface WorkerScope {
 
 const scope = self as unknown as WorkerScope;
 
+function buffersOf(mesh: ChunkMeshData): ArrayBufferLike[] {
+  return [mesh.positions.buffer, mesh.normals.buffer, mesh.uvs.buffer, mesh.layers.buffer, mesh.indices.buffer];
+}
+
 scope.onmessage = (event) => {
   const { chunkX, chunkZ, version, blocks } = event.data;
-  const mesh = meshChunk(blocks, blockLayer);
+  const { opaque, transparent } = meshChunk(blocks, blockLayer);
   scope.postMessage(
-    { chunkX, chunkZ, version, ...mesh },
-    [mesh.positions.buffer, mesh.normals.buffer, mesh.uvs.buffer, mesh.layers.buffer, mesh.indices.buffer]
+    { chunkX, chunkZ, version, opaque, transparent },
+    [...buffersOf(opaque), ...buffersOf(transparent)]
   );
 };

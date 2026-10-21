@@ -64,7 +64,7 @@ export class PlayerController {
 
   private onMouseMove(event: MouseEvent): void {
     if (document.pointerLockElement !== this.domElement) return;
-    const sensitivity = 0.01;
+    const sensitivity = 0.005;
     this.yaw -= event.movementX * sensitivity;
     this.pitch -= event.movementY * sensitivity;
     const maxPitch = Math.PI / 2 - 0.01;

@@ -8,6 +8,7 @@ import { raycastVoxel } from './raycast.js';
 import { RemotePlayers } from './remotePlayers.js';
 import { loadBlockTextureArray } from './textures.js';
 import { LIGHT_COLOR, AMBIENT_INTENSITY, SUN_INTENSITY, SUN_POSITION } from './blockMaterial.js';
+import { Hotbar } from './hotbar.js';
 
 const SESSION_TOKEN_KEY = 'sessionToken';
 
@@ -15,6 +16,10 @@ const statusElMaybe = document.getElementById('app');
 if (!statusElMaybe) throw new Error('missing #app element');
 const statusEl: HTMLElement = statusElMaybe;
 statusEl.textContent = `Loading… (protocol v${PROTOCOL_VERSION})`;
+
+const hotbarElMaybe = document.getElementById('hotbar');
+if (!hotbarElMaybe) throw new Error('missing #hotbar element');
+const hotbar = new Hotbar(hotbarElMaybe);
 
 const chatLogElMaybe = document.getElementById('chat-log');
 const chatInputElMaybe = document.getElementById('chat-input') as HTMLInputElement | null;
@@ -89,7 +94,6 @@ const chunkRenderer = new ChunkRenderer(scene, blockTextureArray);
 const controller = new PlayerController(renderer.domElement, camera, world);
 const remotePlayers = new RemotePlayers(scene);
 
-const PLACEMENT_BLOCK = BLOCKS.STONE.id;
 const MOVE_SEND_INTERVAL_MS = 1000 / 12; // 12 Hz, within PLAN.md's 10-15 Hz target
 
 function base64ToBytes(base64: string): Uint8Array {
@@ -254,8 +258,22 @@ window.addEventListener('keydown', (event) => {
   if (!chatOpen && event.code === 'Enter' && joined) {
     event.preventDefault();
     openChat();
+    return;
   }
+  // Same gating as movement input (PlayerController.setInputEnabled) —
+  // typing a digit into a chat message shouldn't also change the hotbar.
+  if (!chatOpen) hotbar.handleKey(event.code);
 });
+
+renderer.domElement.addEventListener(
+  'wheel',
+  (event) => {
+    if (document.pointerLockElement !== renderer.domElement) return;
+    event.preventDefault();
+    hotbar.handleWheel(event.deltaY);
+  },
+  { passive: false }
+);
 
 chatInputEl.addEventListener('keydown', (event) => {
   event.stopPropagation();
@@ -282,7 +300,7 @@ renderer.domElement.addEventListener('mousedown', (event) => {
     const px = hit.x + hit.normal.x;
     const py = hit.y + hit.normal.y;
     const pz = hit.z + hit.normal.z;
-    net?.send({ type: 'block-update-intent', x: px, y: py, z: pz, blockId: PLACEMENT_BLOCK });
+    net?.send({ type: 'block-update-intent', x: px, y: py, z: pz, blockId: hotbar.selectedBlockId });
   }
 });
 
@@ -290,23 +308,44 @@ renderer.domElement.addEventListener('contextmenu', (event) => event.preventDefa
 
 let lastTime = performance.now();
 let lastMoveSend = 0;
+let reportedTickError = false;
+
 function tick(now: number): void {
-  const dt = Math.min((now - lastTime) / 1000, 0.1);
-  lastTime = now;
+  // A throw anywhere in here (previously) would skip the
+  // requestAnimationFrame(tick) call below and silently end the entire
+  // render loop forever, on that one bad frame — visually indistinguishable
+  // from "the world never loaded": whatever last got drawn (often just
+  // scene.background, before any chunk geometry arrived) stays on screen
+  // permanently. This is one concrete, real way to produce this project's
+  // intermittent "pure blue world" symptom (see HANDOFF.md — never
+  // conclusively root-caused), regardless of what actually throws. Catching
+  // here can't fix a broken frame's content, but it keeps the loop itself
+  // alive so a transient failure has a chance to self-heal on the next
+  // frame instead of freezing forever.
+  try {
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
 
-  controller.update(dt);
-  remotePlayers.tick();
-  renderer.render(scene, camera);
+    controller.update(dt);
+    remotePlayers.tick();
+    renderer.render(scene, camera);
 
-  if (joined && now - lastMoveSend >= MOVE_SEND_INTERVAL_MS) {
-    lastMoveSend = now;
-    const state = controller.getState();
-    net?.send({
-      type: 'player-move',
-      position: { x: state.x, y: state.y, z: state.z },
-      yaw: state.yaw,
-      pitch: state.pitch,
-    });
+    if (joined && now - lastMoveSend >= MOVE_SEND_INTERVAL_MS) {
+      lastMoveSend = now;
+      const state = controller.getState();
+      net?.send({
+        type: 'player-move',
+        position: { x: state.x, y: state.y, z: state.z },
+        yaw: state.yaw,
+        pitch: state.pitch,
+      });
+    }
+  } catch (err) {
+    console.error('[tick] frame failed, continuing:', err);
+    if (!reportedTickError) {
+      reportedTickError = true; // once per session — a broken frame can repeat every frame, and this must never spam chat
+      appendSystemMessage('Something went wrong rendering a frame — reload if the world looks stuck.');
+    }
   }
 
   requestAnimationFrame(tick);

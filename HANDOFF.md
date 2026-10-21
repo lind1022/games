@@ -5,7 +5,7 @@ next. This is a point-in-time status doc, not a spec — [CLAUDE.md](CLAUDE.md) 
 [PLAN.md](PLAN.md) is the phased build plan. This file goes stale; trust `git log` and the code over
 it if they disagree.
 
-**As of 2026-08-18:** Phases 0-7 are committed, plus one Phase 8 task (`447d25e`, `66b689f`, `98a9cb6`,
+**As of 2026-08-19:** Phases 0-7 are committed, plus one Phase 8 task (`447d25e`, `66b689f`, `98a9cb6`,
 `4b455ee`, `f3e4edc`, `c6449b0`, `a4185cf`, `19eaa72`, `6b08610`). **Phase 7 is the headline change**:
 the flat 5x5 test world is gone — the server now loads and spawns into the real, imported Pinehurst
 campus (`19eaa72`; see its own section under §2 and the commit message for the full engineering story).
@@ -13,6 +13,27 @@ campus (`19eaa72`; see its own section under §2 and the commit message for the 
 replaced by a `DataArrayTexture` built from a texture sheet the product owner supplied. Both confirmed
 working by the product owner directly in a browser, not just this session's own scripted verification —
 this session has no WebGL rendering capability of its own to check either with.
+
+**Since then: the rest of Phase 8 is built but UNCOMMITTED, and there's an active, unresolved bug —
+read this before anything else.** `git status` shows real, working-tree-only changes across 9 files
+(`client/index.html`, `client/src/blockMaterial.ts`, `client/src/chunkRenderer.ts`,
+`client/src/controls.ts`, `client/src/hotbar.ts` (new), `client/src/main.ts`, `client/src/mesh.ts`,
+`client/src/mesh.worker.ts`, `shared/src/blocks.ts`) — nothing here has a commit hash yet. Full detail
+is in §2's new "Phase 8 (continued, UNCOMMITTED)" section, but the two things that matter most:
+
+1. **The "pure blue world" bug (§5's original unresolved report) recurred live in this session**, and
+   is still not conclusively root-caused. Two real, previously-100%-silent failure-visibility gaps were
+   found and fixed (a worker with no error handler at all; a render loop a single throw could
+   permanently freeze) — both genuine improvements, neither confirmed as *the* cause. The product owner
+   is now specifically reproducing it in **Safari**, which is a real new lead this session couldn't
+   pursue further itself (no browser access) — the recent shader work uses WebGL2 features (GLSL3
+   `RawShaderMaterial`, `DataArrayTexture`) Safari has historically supported less reliably than
+   Chrome/Firefox. **Get the Safari console output before doing anything else with this codebase.**
+2. **None of Phase 8's remaining work has an explicit "confirmed working in a browser" sign-off yet**
+   except the transparency pass (water visibility + glass, before glass was reverted to opaque) and the
+   texture-atlas work from `6b08610`. The hotbar and the UV-orientation fix (§2) were built and verified
+   only by direct code-level testing (numerically checked outside the browser) — not yet seen on screen
+   by anyone.
 
 Phase 5 (admin panel, plus a Reissue action and a raised chat-log display cap added after initial
 review) was originally scripted-end-to-end-tested against throwaway server instances only, and
@@ -479,6 +500,130 @@ The source stock sheet is a third-party asset, kept out of git like `school map.
 `.gitignore`) — re-running the build script needs it present locally first, licensing terms unverified
 by this session (the product owner sourced and supplied it).
 
+### Phase 8 (continued) — UNCOMMITTED
+Everything below is real, working code in the tree right now (`git status` / `git diff` show it) but
+**has never been committed** — no hash to cite. Picking this up means either committing it (after
+resolving the blue-world bug below, or at least deciding it's not blocking) or continuing on top of it
+as-is. `npm run typecheck` and `npm run build` are both clean against this state.
+
+**C4 whole-world-load spike — run for real against the real campus, resolved, no code change.**
+PLAN.md's own exit criterion (§5): gzipped `world-state` payload and time-to-playable, measured via a
+scripted WS client against a throwaway instance holding the real 529-chunk Phase 7 world. Result: raw
+JSON 0.90 MB, **gzipped 15 KB** — several hundred times under the 5 MB threshold; server-side round
+trip 23 ms locally, estimated ~0.02 s transfer even at a conservative 5 Mbps. Per C4's own rule,
+whole-world load stays and render-distance streaming is never built. Nothing to commit for this one —
+it's a measurement, not a code change — but it's the reason the next two items don't need to worry
+about a chunk-unload path.
+
+**Geometry disposal on remesh/unload.** Remesh-time disposal already existed and was already correct
+(pre-existing code, just confirmed). Unload doesn't apply — confirmed no unload code path exists
+anywhere in the client, and given C4's result above, none will ever be needed. The one real gap found:
+`ChunkRenderer.dispose()` disposed its material but never the `DataArrayTexture` itself, since it's
+only reachable via a shader uniform (`uniforms.map.value`), not `material.map` — the only reference
+three.js's own material disposal knows to follow. Fixed; `dispose()` now also removes every chunk mesh
+from the scene before clearing its own maps.
+
+**Transparent-block second mesh pass (glass, water) — the biggest piece, and it found a real
+pre-existing bug along the way.** PLAN.md's Phase 8 task list only names glass, but this is built
+generally for every `transparent: true` block:
+- **WATER was completely invisible before this, in every build back to Phase 0.** The mesher's
+  face-culling used `isSolid(blockA) !== isSolid(blockB)` to decide whether a face was needed. WATER is
+  `solid: false` — so water-vs-air comparisons always found `solid===solid` (both false) and drew
+  *nothing*, on every side including the top surface. This never mattered before because the flat test
+  world never contained a water block; Phase 7's ponds were the first time it did, and this session's
+  own browser passes on Phase 7/the texture work never happened to look straight down into one. Fixed
+  by changing the mask logic to a proper "is either side literally AIR" test (with a same-id exception
+  so two adjacent identical blocks still don't draw an internal face) instead of a solid-equality test
+  — any non-air block, solid or transparent, now correctly gets a face against air.
+- `mesh.ts`'s `meshChunk()` now returns `{ opaque, transparent }` instead of one flat result, split by
+  `isTransparent(blockId)`. `mesh.worker.ts` passes both halves through. `chunkRenderer.ts` builds two
+  `THREE.Mesh` objects per chunk instead of one, each with its own material, so three.js's automatic
+  transparent-object sort (back-to-front, after all opaque draws) applies correctly.
+- `blockMaterial.ts`'s `createBlockMaterial(map, { transparent })` now has a second variant:
+  `transparent: true, depthWrite: false`, with a flat `alpha` uniform (0.55) — the source texture tiles
+  have no real alpha channel of their own (ordinary opaque pixel art), so "see-through" has to come from
+  the material, not the image.
+- Verified two ways before ever reaching a browser: `meshChunk()` run directly against all 529 real
+  Phase-7 chunks' actual data outside the browser entirely — zero exceptions. The product owner then
+  confirmed in a browser that water renders and glass (before being reverted to opaque — see below) was
+  genuinely see-through.
+
+**Hotbar (`client/src/hotbar.ts`, new) — previously didn't exist at all.** `PLACEMENT_BLOCK` was a
+single hardcoded `STONE` constant; every player could only ever place stone, full stop, regardless of
+anything else this project already supported. Now: one slot per block type (10, in `blocks.ts` id
+order), icons are CSS-cropped straight from the real texture-array source image (no separate icon
+asset — always in sync with however `buildTextureArray.ts` maps blocks to tiles), number keys `1`-`9`
+and `0` select a slot (Minecraft's convention), mouse wheel cycles. Wired into `main.ts` with the same
+gating `controls.ts` already uses for movement (disabled while chat is open, so typing a digit into a
+message doesn't also swap blocks) and `client/index.html` (new `#hotbar` container + CSS). **Not yet
+seen in a browser by anyone** — built and typechecked, not visually confirmed.
+
+**Name tags — reviewed, no changes made.** PLAN.md's Phase 8 list still says "hotbar, join screen, name
+tags" verbatim, but join screen (Phase 4) and name tags (Phase 2, `remotePlayers.ts`) were both already
+built well ahead of Phase 8 — that list item was stale by the time later phases delivered pieces of it
+early. Re-read `remotePlayers.ts` specifically looking for a real gap (interpolation, color-hashing,
+disposal on remove) and found none worth changing.
+
+**The "pure blue world" bug (§5's original report) recurred live in this session — still not
+conclusively root-caused, actively being investigated with the product owner.** Sequence of events:
+1. Product owner hit it while testing the transparency/hotbar work above.
+2. Investigated the most direct lead first: does the rewritten `meshChunk()` throw on any real chunk?
+   Tested directly against all 529 real Phase-7 chunks outside the browser — zero failures. Ruled out.
+3. Found two genuine, previously-**100%-silent** failure-visibility gaps, fixed both, regardless of
+   whether either is *the* cause: `chunkRenderer.ts`'s Web Worker had no `onerror`/`onmessageerror`
+   handler at all — a worker-side failure would mean a chunk simply never arrives, no console output,
+   nothing, indistinguishable from "everything is fine, still loading." `main.ts`'s `tick()` render
+   loop had no error handling — a single throw anywhere in it would skip the
+   `requestAnimationFrame(tick)` call at the end and silently, permanently end the *entire* render loop
+   on that one bad frame, freezing on whatever last rendered (often just `scene.background`'s sky blue,
+   before any chunk geometry has arrived) — exactly the reported symptom, from any transient cause.
+   `tick()` is now wrapped in try/catch: logs to console every time, surfaces one (not spammed)
+   `appendSystemMessage` the first time, and — critically — still calls `requestAnimationFrame(tick)`
+   regardless, so a transient failure gets a chance to self-heal on the next frame instead of freezing
+   forever.
+4. Product owner tried to reproduce with these fixes in place — **could not reproduce it**, once.
+5. It then recurred anyway. They're now specifically reproducing it in **Safari**, with DevTools console
+   open, at this session's request. **This is a real, unconfirmed, but strong new lead**: the shader
+   work above uses WebGL2-specific features — `RawShaderMaterial` with `glslVersion: THREE.GLSL3`
+   (`sampler2DArray`, GLSL ES 3.00 syntax) and `THREE.DataArrayTexture` (texture arrays) — that Safari
+   has historically supported less consistently than Chrome/Firefox. Nothing in this session's own
+   testing (all via scripted Node clients, zero real-browser access) can confirm or rule this in or out.
+   **Whoever picks this up next: get the Safari console output first, before changing anything else.**
+   If it points at shader compilation or `sampler2DArray`, the fix path is almost certainly a Safari-
+   specific fallback (e.g. detecting WebGL2/array-texture support and falling back to the flat-color
+   `MeshLambertMaterial` path Phase 8 replaced, rather than a universal fix) — don't assume it's the
+   same failure mode as steps 1-3 above just because the symptom looks identical.
+
+**GLASS: a real back-and-forth worth understanding, not just the end state.**
+- First made fully opaque per direct request: `shared/src/blocks.ts`'s `GLASS` block flipped from
+  `transparent: true` to `false`. This part stays, uncontested.
+- Its texture ((2,3) in the source sheet — a "snow melting onto dirt mounds" gradient) was initially
+  **re-cropped** to isolate just the clean snow band, dropping the dirt portion entirely — a
+  misreading of "I want the snow cover to be always on top" as a request about texture *content*.
+  **Reverted** — `tools/src/buildTextureArray.ts` is back to a plain single-tile crop for GLASS, no
+  special-casing, once the product owner clarified they meant something else.
+- What they actually meant, and what's actually fixed: a real **UV-axis-mapping bug in `mesh.ts`'s
+  greedy mesher**, general to every directional texture (this snow/dirt gradient, but equally brick
+  coursing or wood grain), not GLASS-specific. For east/west-facing wall faces specifically (`d===0` in
+  the mesher's internal `(d+1)%3`/`(d+2)%3` axis-cycling — north/south walls and the top/bottom faces
+  were *already* correct, by coincidence of that formula, which is exactly why this went unnoticed
+  until a texture with an obvious "this side up" made it visible), world-**Y** was being mapped to the
+  texture's horizontal (S/column) coordinate instead of its vertical (T/row) one — so a texture meant
+  to read top-to-bottom instead appeared to run sideways, only on that one wall orientation. Fixed by
+  swapping which of the merged quad's width/height drives texture-S vs texture-T specifically when the
+  mesher's "u" axis is Y (`d===0` only) — the geometric position/mask/merge/winding logic above it is
+  completely untouched; this is purely a texture-coordinate remap layered on top.
+- Verified **numerically, not visually** (still no browser access): wrote and ran a synthetic
+  multi-block-merge test directly against `meshChunk()` (not checked in — discarded after use, this
+  project's established pattern for one-off verification scripts) confirming a 4-tall merged column's
+  Y-extent now lands on the texture's row coordinate for the previously-broken wall direction, while
+  the already-correct wall direction and the top face are unaffected. **Not yet confirmed on screen.**
+
+**Mouse sensitivity halved**, per direct request: `client/src/controls.ts`'s `sensitivity` constant,
+`0.01` → `0.005`. (Context for whoever touches this next: `0.01` itself was arrived at through several
+rounds of live tuning during Phase 1's original browser pass, up from an initial `0.0022` — see §3's
+Phase 1 entry. This halving hasn't had its own dedicated feel-check yet.)
+
 ---
 
 ## 3. Browser verification
@@ -735,6 +880,10 @@ none of it involves a human typing shell commands from documentation for the fir
   this as unresolved, not closing it out**, since "stopped reproducing" isn't the same as "explained."
   If it recurs, the diagnostic steps to ask for are: browser DevTools console errors at the time, and
   whether an in-tab reload (not a new tab) also fixes it.
+  **Update: it recurred**, live in a later session, after the Phase 8 texture/transparency/hotbar work
+  — see §2's "Phase 8 (continued) — UNCOMMITTED" section and §6 for the full, current investigation
+  (what's been ruled out, what's been fixed as defense-in-depth without confirming root cause, and the
+  live Safari-specific lead being chased now). Still not conclusively explained, second time around.
 
 ### Real setup friction (now reflected in SELF_HOSTING.md, or just worth knowing about)
 
@@ -784,25 +933,33 @@ deliberately too (pure write-through already makes every change durable immediat
 Phase 6's actual correctness "done when" criterion, and this project's ≤5-player scale is unlikely to
 need the write-amplification optimization that buffer would trade simplicity away for).
 
-**Phase 7 (school map importer) is done** (`19eaa72` — see its own section under §2 for the full story).
-The real campus is what loads now, not the flat test world; `WORLD_CHUNKS`/`SPAWN` are wired to it.
+**Top priority: the "pure blue world" bug is back, unresolved, and actively being chased with the
+product owner in Safari right now.** Full story in §2's "Phase 8 (continued) — UNCOMMITTED" section —
+don't skip it, there's real diagnostic history there (what's been ruled out, what's been fixed as
+defense-in-depth without confirming it's the cause, and exactly what to ask for next: Safari DevTools
+console output, since the newest code uses WebGL2 features — GLSL3 `RawShaderMaterial`,
+`DataArrayTexture` — Safari has historically been shakier on than Chrome/Firefox). This bug has now
+been reported, investigated, and left unresolved *twice* (originally in §5, now again here) — worth
+treating as a real priority rather than something to note and move past a third time.
 
-**Phase 8 (performance & polish) is in progress — only its texture-atlas task is done** (`6b08610`, see
-§2). Real block textures (a `DataArrayTexture`, not flat vertex colors) replaced `client/src/colors.ts`;
-the product owner supplied the source texture sheet and confirmed the result in a browser. **Still open
-in Phase 8**, none started: the C4 whole-world-load spike (now genuinely possible to run — the real
-imported world exists to spike against, unlike when C4 was originally deferred), geometry disposal on
-remesh/unload, glass's transparent second mesh pass (glass has a texture now but no real alpha-blending
-logic — a `GLASS` block currently renders opaque), and hotbar/name-tag polish.
+**Phase 7 (school map importer) is done and committed** (`19eaa72` — see its own section under §2 for
+the full story). The real campus is what loads now, not the flat test world; `WORLD_CHUNKS`/`SPAWN` are
+wired to it.
+
+**Phase 8 (performance & polish) is functionally complete but only partly committed.** The
+texture-atlas task is committed (`6b08610`). Everything else on PLAN.md's Phase 8 list — the C4 spike
+(resolved: keep whole-world load, confirmed against the real campus), geometry disposal, the
+transparent-block second pass (and the real WATER-was-always-invisible bug it uncovered), the hotbar,
+and a UV-orientation bug fix found along the way — is **built, typechecked, and sitting uncommitted in
+the working tree** (§2 has the full detail on each). Name tags needed no changes (already solid from
+Phase 2). None of the uncommitted pieces except the transparency pass have been confirmed working in an
+actual browser yet — that, plus the blue-world bug above, are what's blocking a clean commit and true
+"Phase 8 done" status.
 
 One loose end from Phase 7 worth remembering if picking that back up specifically: PLAN.md's original
 map inspection read the pod count as P1–P23, the product owner recalled P1–P22 — never actually
 recounted against the pixels (the importer doesn't hardcode a pod count anywhere, so this didn't block
 Phase 7, but it's still an open factual question if it ever matters for something else).
-
-**Watch for recurrence of the unresolved "blank blue world" bug** (§5) — it stopped reproducing but
-was never conclusively root-caused. If it comes back, get browser console errors and whether an
-in-tab reload (not a new tab) also fixes it; that'll narrow it down fast.
 
 Both pre-launch items from the previous version of this section are now done:
 - **`chatFilter.ts`'s `WHITELIST` is seeded** (`462a5a0`): real display names issued so far (`Eddie`,

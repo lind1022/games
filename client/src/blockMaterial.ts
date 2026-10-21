@@ -44,6 +44,7 @@ uniform sampler2DArray map;
 uniform vec3 ambientColor;
 uniform vec3 sunColor;
 uniform vec3 sunDirection;
+uniform float alpha;
 
 in vec2 vUv;
 in float vLayer;
@@ -62,9 +63,16 @@ void main() {
 
   float diffuse = max(dot(normalize(vNormal), sunDirection), 0.0);
   vec3 lit = texColor.rgb * (ambientColor + sunColor * diffuse);
-  fragColor = vec4(lit, texColor.a);
+  // alpha is a flat per-material multiplier, not sampled from the
+  // texture: the source tiles (textures.ts) are ordinary opaque pixel art
+  // with no real alpha channel of their own, so a see-through look for
+  // GLASS/WATER (both transparent:true in shared/src/blocks.ts) has to
+  // come from the material, not the image.
+  fragColor = vec4(lit, texColor.a * alpha);
 }
 `;
+
+const TRANSPARENT_ALPHA = 0.55;
 
 /**
  * Hand-rolled RawShaderMaterial (not ShaderMaterial — declares every
@@ -72,17 +80,29 @@ void main() {
  * MeshLambertMaterial's ambient+diffuse look closely enough for this
  * project's flat, unshadowed lighting, but sampling a per-block-type
  * texture-array layer instead of a flat vertex color.
+ *
+ * `transparent: true` builds the alpha-blended variant for mesh.ts's
+ * `ChunkMeshResult.transparent` half (GLASS, WATER) — `depthWrite: false`
+ * is the standard fix for the artifact where a transparent fragment would
+ * otherwise occlude whatever should still be visible behind it in the
+ * depth buffer despite letting light through visually.
  */
-export function createBlockMaterial(map: THREE.DataArrayTexture): THREE.RawShaderMaterial {
+export function createBlockMaterial(
+  map: THREE.DataArrayTexture,
+  { transparent = false }: { transparent?: boolean } = {}
+): THREE.RawShaderMaterial {
   return new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3,
     vertexShader: VERTEX_SHADER,
     fragmentShader: FRAGMENT_SHADER,
+    transparent,
+    depthWrite: !transparent,
     uniforms: {
       map: { value: map },
       ambientColor: { value: new THREE.Color(LIGHT_COLOR).multiplyScalar(AMBIENT_INTENSITY) },
       sunColor: { value: new THREE.Color(LIGHT_COLOR).multiplyScalar(SUN_INTENSITY) },
       sunDirection: { value: SUN_POSITION.clone().normalize() },
+      alpha: { value: transparent ? TRANSPARENT_ALPHA : 1.0 },
     },
   });
 }
